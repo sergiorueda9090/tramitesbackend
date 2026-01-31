@@ -24,12 +24,13 @@ def me_view(request):
             "first_name"  : user.first_name,
             "last_name"   : user.last_name,
             "email"       : user.email,
-            "role"        :"",
+            "role"        : getattr(user, 'role', 'user'),
             "is_active"   : user.is_active,
             "is_staff"    : user.is_staff,
             "is_superuser": user.is_superuser,
             "last_login"  : user.last_login,
             "date_joined" : user.date_joined,
+            "avatar"      : getattr(user, 'avatar', None),
         }
         return Response(data, status=status.HTTP_200_OK)
     except Exception as e:
