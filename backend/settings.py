@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'devoluciones',
     'cargos_no_registrados',
     'ajuste_de_saldo',
+    'gastos',
 ]
 
 MIDDLEWARE = [
