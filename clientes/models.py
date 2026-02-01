@@ -60,3 +60,27 @@ class Cliente(models.Model):
     def restore(self):
         self.deleted_at = None
         self.save()
+
+class PrecioCliente(models.Model):
+    cliente = models.ForeignKey(
+        Cliente,
+        on_delete=models.CASCADE,
+        related_name='precios'
+    )
+    descripcion = models.CharField(max_length=255)
+    precio_lay  = models.DecimalField(max_digits=10, decimal_places=2)
+    comision    = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+    deleted_at  = models.DateTimeField(null=True, blank=True)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        db_table = 'precios_clientes'
+        ordering = ['-created_at']
+        verbose_name = 'Precio Cliente'
+        verbose_name_plural = 'Precios Clientes'
+
+    def __str__(self):
+        return f'{self.descripcion} - Ley: {self.precio_lay} - Comision: {self.comision}'

@@ -30,4 +30,8 @@ urlpatterns = [
     path('api/clientes/',      include('clientes.api.urls'),    name="clientes"),
     path('api/etiquetas/',     include('etiquetas.api.urls'),   name="etiquetas"),
     path('api/proveedores/',   include('proveedores.api.urls'),    name="proveedores"),
+    path('api/cotizador/',     include('cotizador.api.urls'),   name="cotizador"),
+    path('api/tarjetas/',      include('tarjetas.api.urls'),    name="tarjetas"),
+    path('api/recepcion_pago/', include('recepcion_pago.api.urls'), name="recepcion_pago"),
+    path('api/devoluciones/',  include('devoluciones.api.urls'), name="devoluciones"),
 ]

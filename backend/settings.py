@@ -49,6 +49,10 @@ INSTALLED_APPS = [
     'clientes',
     'etiquetas',
     'proveedores',
+    'cotizador',
+    'tarjetas',
+    'recepcion_pago',
+    'devoluciones',
 ]
 
 MIDDLEWARE = [
