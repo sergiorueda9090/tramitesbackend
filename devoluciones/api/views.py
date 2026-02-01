@@ -7,9 +7,19 @@ from django.shortcuts import get_object_or_404
 from django.db import DatabaseError
 from django.db.models import Q
 from datetime import datetime
+from decimal import Decimal
 
 from ..models import Devolucion
+from tarjetas.models import Tarjeta
+from clientes.models import Cliente
 from .permissions import RolePermission
+
+
+def calcular_cuatro_por_mil(valor, tarjeta):
+    """Calcula el cuatro por mil si la tarjeta lo tiene activo"""
+    if tarjeta.cuatro_por_mil == '1':
+        return (Decimal(valor) * Decimal('4')) / Decimal('1000')
+    return Decimal('0')
 
 
 def serialize_devolucion(devolucion):
@@ -28,8 +38,11 @@ def serialize_devolucion(devolucion):
             'id': devolucion.tarjeta.id,
             'numero': devolucion.tarjeta.numero,
             'titular': devolucion.tarjeta.titular,
+            'cuatro_por_mil': devolucion.tarjeta.cuatro_por_mil,
         } if devolucion.tarjeta else None,
         'valor': str(devolucion.valor),
+        'cuatro_por_mil': str(devolucion.cuatro_por_mil),
+        'total': str(devolucion.total),
         'observacion': devolucion.observacion,
         'fecha': devolucion.fecha,
         'created_at': devolucion.created_at,
@@ -51,11 +64,54 @@ def create_devolucion(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+        # Validar que el usuario exista
+        if not request.user or not request.user.is_authenticated:
+            return Response(
+                {"error": "Usuario no autenticado."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Validar que el cliente exista
+        cliente_id = request.data.get('cliente')
+        try:
+            cliente = Cliente.objects.get(pk=cliente_id)
+            if cliente.deleted_at is not None:
+                return Response(
+                    {"error": "El cliente especificado está eliminado."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except Cliente.DoesNotExist:
+            return Response(
+                {"error": "El cliente especificado no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Validar que la tarjeta exista
+        tarjeta_id = request.data.get('tarjeta')
+        try:
+            tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+            if tarjeta.deleted_at is not None:
+                return Response(
+                    {"error": "La tarjeta especificada está eliminada."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except Tarjeta.DoesNotExist:
+            return Response(
+                {"error": "La tarjeta especificada no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        valor = Decimal(request.data.get('valor'))
+        cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+        total = valor + cuatro_por_mil
+
         devolucion = Devolucion.objects.create(
             usuario=request.user,
-            cliente_id=request.data.get('cliente'),
-            tarjeta_id=request.data.get('tarjeta'),
-            valor=request.data.get('valor'),
+            cliente=cliente,
+            tarjeta=tarjeta,
+            valor=valor,
+            cuatro_por_mil=cuatro_por_mil,
+            total=total,
             observacion=request.data.get('observacion', ''),
             fecha=request.data.get('fecha'),
         )
@@ -208,18 +264,53 @@ def get_devolucion(request, pk):
 def update_devolucion(request, pk):
     """Actualizar una devolución"""
     try:
-        devolucion = get_object_or_404(Devolucion.objects, pk=pk)
+        devolucion = get_object_or_404(Devolucion.objects.select_related('tarjeta'), pk=pk)
 
-        # Actualizar FKs si se proporcionan
+        # Validar que el cliente exista si se proporciona
         if 'cliente' in request.data:
-            devolucion.cliente_id = request.data.get('cliente')
+            cliente_id = request.data.get('cliente')
+            try:
+                cliente = Cliente.objects.get(pk=cliente_id)
+                if cliente.deleted_at is not None:
+                    return Response(
+                        {"error": "El cliente especificado está eliminado."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                devolucion.cliente = cliente
+            except Cliente.DoesNotExist:
+                return Response(
+                    {"error": "El cliente especificado no existe."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+        # Validar que la tarjeta exista si se proporciona
+        tarjeta = devolucion.tarjeta
         if 'tarjeta' in request.data:
-            devolucion.tarjeta_id = request.data.get('tarjeta')
+            tarjeta_id = request.data.get('tarjeta')
+            try:
+                tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+                if tarjeta.deleted_at is not None:
+                    return Response(
+                        {"error": "La tarjeta especificada está eliminada."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                devolucion.tarjeta = tarjeta
+            except Tarjeta.DoesNotExist:
+                return Response(
+                    {"error": "La tarjeta especificada no existe."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
         # Actualizar otros campos
         devolucion.valor = request.data.get('valor', devolucion.valor)
         devolucion.observacion = request.data.get('observacion', devolucion.observacion)
         devolucion.fecha = request.data.get('fecha', devolucion.fecha)
+
+        # Recalcular cuatro_por_mil y total si cambió valor o tarjeta
+        if 'valor' in request.data or 'tarjeta' in request.data:
+            valor = Decimal(devolucion.valor)
+            devolucion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+            devolucion.total = valor + devolucion.cuatro_por_mil
 
         devolucion.save()
 
@@ -326,6 +417,8 @@ def devolucion_history(request, pk):
                 'cliente_id': h.cliente_id,
                 'tarjeta_id': h.tarjeta_id,
                 'valor': str(h.valor),
+                'cuatro_por_mil': str(h.cuatro_por_mil),
+                'total': str(h.total),
                 'observacion': h.observacion,
                 'fecha': h.fecha,
             })

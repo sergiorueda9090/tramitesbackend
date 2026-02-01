@@ -34,4 +34,6 @@ urlpatterns = [
     path('api/tarjetas/',      include('tarjetas.api.urls'),    name="tarjetas"),
     path('api/recepcion_pago/', include('recepcion_pago.api.urls'), name="recepcion_pago"),
     path('api/devoluciones/',  include('devoluciones.api.urls'), name="devoluciones"),
+    path('api/cargos_no_registrados/', include('cargos_no_registrados.api.urls'), name="cargos_no_registrados"),
+    path('api/ajuste_de_saldo/', include('ajuste_de_saldo.api.urls'), name="ajuste_de_saldo"),
 ]

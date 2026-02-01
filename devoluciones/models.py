@@ -27,6 +27,9 @@ class Devolucion(models.Model):
     observacion     = models.TextField(blank=True, null=True)
     fecha           = models.DateTimeField()
     
+    cuatro_por_mil = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total          = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)

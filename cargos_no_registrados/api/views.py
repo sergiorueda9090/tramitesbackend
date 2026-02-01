@@ -9,7 +9,7 @@ from django.db.models import Q
 from datetime import datetime
 from decimal import Decimal
 
-from ..models import RecepcionPago
+from ..models import CargoNoRegistrado
 from tarjetas.models import Tarjeta
 from clientes.models import Cliente
 from .permissions import RolePermission
@@ -22,39 +22,39 @@ def calcular_cuatro_por_mil(valor, tarjeta):
     return Decimal('0')
 
 
-def serialize_recepcion_pago(recepcion):
-    """Convierte un objeto RecepcionPago a diccionario"""
+def serialize_cargo_no_registrado(cargo):
+    """Convierte un objeto CargoNoRegistrado a diccionario"""
     return {
-        'id': recepcion.id,
+        'id': cargo.id,
         'usuario': {
-            'id': recepcion.usuario.id,
-            'name': f"{recepcion.usuario.first_name} {recepcion.usuario.last_name}".strip(),
-        } if recepcion.usuario else None,
+            'id': cargo.usuario.id,
+            'name': f"{cargo.usuario.first_name} {cargo.usuario.last_name}".strip(),
+        } if cargo.usuario else None,
         'cliente': {
-            'id': recepcion.cliente.id,
-            'nombre': recepcion.cliente.nombre,
-        } if recepcion.cliente else None,
+            'id': cargo.cliente.id,
+            'nombre': cargo.cliente.nombre,
+        } if cargo.cliente else None,
         'tarjeta': {
-            'id': recepcion.tarjeta.id,
-            'numero': recepcion.tarjeta.numero,
-            'titular': recepcion.tarjeta.titular,
-            'cuatro_por_mil': recepcion.tarjeta.cuatro_por_mil,
-        } if recepcion.tarjeta else None,
-        'valor': str(recepcion.valor),
-        'cuatro_por_mil': str(recepcion.cuatro_por_mil),
-        'total': str(recepcion.total),
-        'observacion': recepcion.observacion,
-        'fecha': recepcion.fecha,
-        'created_at': recepcion.created_at,
-        'updated_at': recepcion.updated_at,
-        'deleted_at': recepcion.deleted_at,
+            'id': cargo.tarjeta.id,
+            'numero': cargo.tarjeta.numero,
+            'titular': cargo.tarjeta.titular,
+            'cuatro_por_mil': cargo.tarjeta.cuatro_por_mil,
+        } if cargo.tarjeta else None,
+        'valor': str(cargo.valor),
+        'cuatro_por_mil': str(cargo.cuatro_por_mil),
+        'total': str(cargo.total),
+        'observacion': cargo.observacion,
+        'fecha': cargo.fecha,
+        'created_at': cargo.created_at,
+        'updated_at': cargo.updated_at,
+        'deleted_at': cargo.deleted_at,
     }
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
-def create_recepcion_pago(request):
-    """Crear una nueva recepción de pago"""
+def create_cargo_no_registrado(request):
+    """Crear un nuevo cargo no registrado"""
     try:
         required_fields = ['cliente', 'tarjeta', 'valor', 'fecha']
         for field in required_fields:
@@ -105,7 +105,7 @@ def create_recepcion_pago(request):
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
-        recepcion = RecepcionPago.objects.create(
+        cargo = CargoNoRegistrado.objects.create(
             usuario=request.user,
             cliente=cliente,
             tarjeta=tarjeta,
@@ -116,7 +116,7 @@ def create_recepcion_pago(request):
             fecha=request.data.get('fecha'),
         )
 
-        return Response(serialize_recepcion_pago(recepcion), status=status.HTTP_201_CREATED)
+        return Response(serialize_cargo_no_registrado(cargo), status=status.HTTP_201_CREATED)
 
     except DatabaseError as e:
         return Response(
@@ -132,17 +132,17 @@ def create_recepcion_pago(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def list_recepciones_pago(request):
-    """Listar recepciones de pago con filtros y paginación"""
+def list_cargos_no_registrados(request):
+    """Listar cargos no registrados con filtros y paginación"""
     try:
-        recepciones = RecepcionPago.objects.select_related(
+        cargos = CargoNoRegistrado.objects.select_related(
             'usuario', 'cliente', 'tarjeta'
         ).all()
 
         # Filtro de búsqueda
         search_query = request.query_params.get('search', None)
         if search_query:
-            recepciones = recepciones.filter(
+            cargos = cargos.filter(
                 Q(cliente__nombre__icontains=search_query) |
                 Q(tarjeta__numero__icontains=search_query) |
                 Q(tarjeta__titular__icontains=search_query) |
@@ -152,26 +152,26 @@ def list_recepciones_pago(request):
         # Filtro por cliente
         cliente_id = request.query_params.get('cliente', None)
         if cliente_id:
-            recepciones = recepciones.filter(cliente_id=cliente_id)
+            cargos = cargos.filter(cliente_id=cliente_id)
 
         # Filtro por tarjeta
         tarjeta_id = request.query_params.get('tarjeta', None)
         if tarjeta_id:
-            recepciones = recepciones.filter(tarjeta_id=tarjeta_id)
+            cargos = cargos.filter(tarjeta_id=tarjeta_id)
 
         # Filtro por usuario
         usuario_id = request.query_params.get('usuario', None)
         if usuario_id:
-            recepciones = recepciones.filter(usuario_id=usuario_id)
+            cargos = cargos.filter(usuario_id=usuario_id)
 
-        # Filtro por fecha de recepción
+        # Filtro por fecha
         fecha_start = request.query_params.get('fecha_start', None)
         fecha_end = request.query_params.get('fecha_end', None)
 
         if fecha_start:
             try:
                 start_date = datetime.strptime(fecha_start, '%Y-%m-%d').date()
-                recepciones = recepciones.filter(fecha__gte=start_date)
+                cargos = cargos.filter(fecha__gte=start_date)
             except ValueError:
                 return Response(
                     {"error": "El formato de fecha_start debe ser YYYY-MM-DD."},
@@ -181,7 +181,7 @@ def list_recepciones_pago(request):
         if fecha_end:
             try:
                 end_date = datetime.strptime(fecha_end, '%Y-%m-%d').date()
-                recepciones = recepciones.filter(fecha__lte=end_date)
+                cargos = cargos.filter(fecha__lte=end_date)
             except ValueError:
                 return Response(
                     {"error": "El formato de fecha_end debe ser YYYY-MM-DD."},
@@ -195,7 +195,7 @@ def list_recepciones_pago(request):
         if start_date_str:
             try:
                 start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-                recepciones = recepciones.filter(created_at__gte=start_date)
+                cargos = cargos.filter(created_at__gte=start_date)
             except ValueError:
                 return Response(
                     {"error": "El formato de la fecha de inicio debe ser YYYY-MM-DD."},
@@ -206,7 +206,7 @@ def list_recepciones_pago(request):
             try:
                 end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
                 end_date_inclusive = datetime.combine(end_date, datetime.max.time())
-                recepciones = recepciones.filter(created_at__lte=end_date_inclusive)
+                cargos = cargos.filter(created_at__lte=end_date_inclusive)
             except ValueError:
                 return Response(
                     {"error": "El formato de la fecha de fin debe ser YYYY-MM-DD."},
@@ -216,10 +216,10 @@ def list_recepciones_pago(request):
         # Filtro para incluir eliminados
         include_deleted = request.query_params.get('include_deleted', None)
         if include_deleted != '1':
-            recepciones = recepciones.filter(deleted_at__isnull=True)
+            cargos = cargos.filter(deleted_at__isnull=True)
 
         # Ordenar
-        recepciones = recepciones.order_by('-created_at')
+        cargos = cargos.order_by('-created_at')
 
         # Paginación
         page_size_param = request.query_params.get('page_size', 10)
@@ -230,41 +230,41 @@ def list_recepciones_pago(request):
 
         paginator = PageNumberPagination()
         paginator.page_size = page_size_int
-        paginated_recepciones = paginator.paginate_queryset(recepciones, request)
+        paginated_cargos = paginator.paginate_queryset(cargos, request)
 
-        data = [serialize_recepcion_pago(r) for r in paginated_recepciones]
+        data = [serialize_cargo_no_registrado(c) for c in paginated_cargos]
         return paginator.get_paginated_response(data)
 
     except Exception as e:
         return Response(
-            {"error": f"Error al obtener recepciones de pago: {str(e)}"},
+            {"error": f"Error al obtener cargos no registrados: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def get_recepcion_pago(request, pk):
-    """Obtener una recepción de pago por ID"""
+def get_cargo_no_registrado(request, pk):
+    """Obtener un cargo no registrado por ID"""
     try:
-        recepcion = get_object_or_404(
-            RecepcionPago.objects.select_related('usuario', 'cliente', 'tarjeta'),
+        cargo = get_object_or_404(
+            CargoNoRegistrado.objects.select_related('usuario', 'cliente', 'tarjeta'),
             pk=pk
         )
-        return Response(serialize_recepcion_pago(recepcion), status=status.HTTP_200_OK)
+        return Response(serialize_cargo_no_registrado(cargo), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
-            {"error": f"Error al obtener recepción de pago: {str(e)}"},
+            {"error": f"Error al obtener cargo no registrado: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
-def update_recepcion_pago(request, pk):
-    """Actualizar una recepción de pago"""
+def update_cargo_no_registrado(request, pk):
+    """Actualizar un cargo no registrado"""
     try:
-        recepcion = get_object_or_404(RecepcionPago.objects.select_related('tarjeta'), pk=pk)
+        cargo = get_object_or_404(CargoNoRegistrado.objects.select_related('tarjeta'), pk=pk)
 
         # Validar que el cliente exista si se proporciona
         if 'cliente' in request.data:
@@ -276,7 +276,7 @@ def update_recepcion_pago(request, pk):
                         {"error": "El cliente especificado está eliminado."},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-                recepcion.cliente = cliente
+                cargo.cliente = cliente
             except Cliente.DoesNotExist:
                 return Response(
                     {"error": "El cliente especificado no existe."},
@@ -284,7 +284,7 @@ def update_recepcion_pago(request, pk):
                 )
 
         # Validar que la tarjeta exista si se proporciona
-        tarjeta = recepcion.tarjeta
+        tarjeta = cargo.tarjeta
         if 'tarjeta' in request.data:
             tarjeta_id = request.data.get('tarjeta')
             try:
@@ -294,7 +294,7 @@ def update_recepcion_pago(request, pk):
                         {"error": "La tarjeta especificada está eliminada."},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-                recepcion.tarjeta = tarjeta
+                cargo.tarjeta = tarjeta
             except Tarjeta.DoesNotExist:
                 return Response(
                     {"error": "La tarjeta especificada no existe."},
@@ -302,19 +302,19 @@ def update_recepcion_pago(request, pk):
                 )
 
         # Actualizar otros campos
-        recepcion.valor = request.data.get('valor', recepcion.valor)
-        recepcion.observacion = request.data.get('observacion', recepcion.observacion)
-        recepcion.fecha = request.data.get('fecha', recepcion.fecha)
+        cargo.valor = request.data.get('valor', cargo.valor)
+        cargo.observacion = request.data.get('observacion', cargo.observacion)
+        cargo.fecha = request.data.get('fecha', cargo.fecha)
 
         # Recalcular cuatro_por_mil y total si cambió valor o tarjeta
         if 'valor' in request.data or 'tarjeta' in request.data:
-            valor = Decimal(recepcion.valor)
-            recepcion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-            recepcion.total = valor + recepcion.cuatro_por_mil
+            valor = Decimal(cargo.valor)
+            cargo.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+            cargo.total = valor + cargo.cuatro_por_mil
 
-        recepcion.save()
+        cargo.save()
 
-        return Response(serialize_recepcion_pago(recepcion), status=status.HTTP_200_OK)
+        return Response(serialize_cargo_no_registrado(cargo), status=status.HTTP_200_OK)
 
     except DatabaseError as e:
         return Response(
@@ -330,67 +330,67 @@ def update_recepcion_pago(request, pk):
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
-def delete_recepcion_pago(request, pk):
-    """Eliminar una recepción de pago (soft delete)"""
+def delete_cargo_no_registrado(request, pk):
+    """Eliminar un cargo no registrado (soft delete)"""
     try:
-        recepcion = get_object_or_404(RecepcionPago.objects, pk=pk)
-        recepcion.soft_delete()
+        cargo = get_object_or_404(CargoNoRegistrado.objects, pk=pk)
+        cargo.soft_delete()
         return Response(
-            {"message": "Recepción de pago eliminada correctamente"},
+            {"message": "Cargo no registrado eliminado correctamente"},
             status=status.HTTP_200_OK
         )
     except Exception as e:
         return Response(
-            {"error": f"Error al eliminar recepción de pago: {str(e)}"},
+            {"error": f"Error al eliminar cargo no registrado: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
-def restore_recepcion_pago(request, pk):
-    """Restaurar una recepción de pago eliminada"""
+def restore_cargo_no_registrado(request, pk):
+    """Restaurar un cargo no registrado eliminado"""
     try:
-        recepcion = get_object_or_404(RecepcionPago.objects, pk=pk)
-        if not recepcion.is_deleted:
+        cargo = get_object_or_404(CargoNoRegistrado.objects, pk=pk)
+        if not cargo.is_deleted:
             return Response(
-                {"error": "La recepción de pago no está eliminada"},
+                {"error": "El cargo no registrado no está eliminado"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        recepcion.restore()
-        return Response(serialize_recepcion_pago(recepcion), status=status.HTTP_200_OK)
+        cargo.restore()
+        return Response(serialize_cargo_no_registrado(cargo), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
-            {"error": f"Error al restaurar recepción de pago: {str(e)}"},
+            {"error": f"Error al restaurar cargo no registrado: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
-def hard_delete_recepcion_pago(request, pk):
-    """Eliminar permanentemente una recepción de pago"""
+def hard_delete_cargo_no_registrado(request, pk):
+    """Eliminar permanentemente un cargo no registrado"""
     try:
-        recepcion = get_object_or_404(RecepcionPago.objects, pk=pk)
-        recepcion.delete()
+        cargo = get_object_or_404(CargoNoRegistrado.objects, pk=pk)
+        cargo.delete()
         return Response(
-            {"message": "Recepción de pago eliminada permanentemente"},
+            {"message": "Cargo no registrado eliminado permanentemente"},
             status=status.HTTP_204_NO_CONTENT
         )
     except Exception as e:
         return Response(
-            {"error": f"Error al eliminar recepción de pago: {str(e)}"},
+            {"error": f"Error al eliminar cargo no registrado: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
-def recepcion_pago_history(request, pk):
-    """Obtener el historial de cambios de una recepción de pago"""
+def cargo_no_registrado_history(request, pk):
+    """Obtener el historial de cambios de un cargo no registrado"""
     try:
-        recepcion = get_object_or_404(RecepcionPago.objects, pk=pk)
-        history = recepcion.history.all()
+        cargo = get_object_or_404(CargoNoRegistrado.objects, pk=pk)
+        history = cargo.history.all()
 
         # Paginación
         page_size_param = request.query_params.get('page_size', 10)

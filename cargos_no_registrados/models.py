@@ -4,32 +4,32 @@ from clientes.models import Cliente
 from tarjetas.models import Tarjeta
 from simple_history.models import HistoricalRecords
 
-class RecepcionPago(models.Model):
+class CargoNoRegistrado(models.Model):
     usuario = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='recepciones_pago'
+        related_name='cargos_no_registrados'
     )
 
     cliente = models.ForeignKey(
         Cliente,
         on_delete=models.CASCADE,
-        related_name='recepciones_pago'
+        related_name='cargos_no_registrados'
     )
 
     tarjeta = models.ForeignKey(
         Tarjeta,
         on_delete=models.CASCADE,
-        related_name='recepciones_pago'
+        related_name='cargos_no_registrados'
     )
 
     valor       = models.DecimalField(max_digits=10, decimal_places=2)
     observacion = models.TextField(blank=True, null=True)
     fecha       = models.DateTimeField()
-
+    
     cuatro_por_mil = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total          = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -37,13 +37,13 @@ class RecepcionPago(models.Model):
     history = HistoricalRecords()
 
     class Meta:
-        db_table = 'recepciones_pago'
+        db_table = 'cargos_no_registrados'
         ordering = ['-created_at']
-        verbose_name = 'Recepcion Pago'
-        verbose_name_plural = 'Recepciones Pago'
+        verbose_name = 'Cargo No Registrado'
+        verbose_name_plural = 'Cargos No Registrados'
 
     def __str__(self):
-        return f'RecepcionPago {self.id} - Cliente: {self.cliente} - Tarjeta: {self.tarjeta} - Valor: {self.valor}'
+        return f'CargoNoRegistrado {self.id} - Cliente: {self.cliente} - Tarjeta: {self.tarjeta} - Valor: {self.valor}'
 
     @property
     def is_deleted(self):
