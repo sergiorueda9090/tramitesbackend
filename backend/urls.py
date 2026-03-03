@@ -37,5 +37,7 @@ urlpatterns = [
     path('api/cargos_no_registrados/', include('cargos_no_registrados.api.urls'), name="cargos_no_registrados"),
     path('api/ajuste_de_saldo/', include('ajuste_de_saldo.api.urls'), name="ajuste_de_saldo"),
     path('api/gastos/',             include('gastos.api.urls'),      name="gastos"),
+    path('api/tarifario_soat/',     include('tarifario_soat.api.urls'),     name="tarifario_soat"),
     path('api/utilidad_ocasional/', include('utilidad_ocasional.api.urls'), name="utilidad_ocasional"),
+    path('api/tarifarios_soat/',     include('tarifario_soat.api.urls'),     name="tarifarios_soat"),
 ]

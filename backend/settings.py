@@ -56,7 +56,8 @@ INSTALLED_APPS = [
     'cargos_no_registrados',
     'ajuste_de_saldo',
     'gastos',
-    'utilidad_ocasional'
+    'utilidad_ocasional',
+    'tarifario_soat',
 ]
 
 MIDDLEWARE = [
