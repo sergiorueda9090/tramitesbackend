@@ -3,6 +3,13 @@ from django.conf import settings
 from simple_history.models import HistoricalRecords
 
 
+class TipoCliente(models.TextChoices):
+    CDA = 'cda', 'CDA'
+    CONCESIONARIO = 'concesionario', 'Concesionario'
+    PARTICULAR = 'particular', 'Particular'
+    PUNTO_ALIADO = 'punto_aliado', 'Punto aliado'
+
+
 class MedioComunicacion(models.TextChoices):
     EMAIL = 'email', 'Email'
     WHATSAPP = 'whatsapp', 'WhatsApp'
@@ -20,6 +27,11 @@ class Cliente(models.Model):
         blank=True,
         related_name='clientes_asignados',
         help_text='Usuario asociado al cliente'
+    )
+    tipo_cliente = models.CharField(
+        max_length=20,
+        choices=TipoCliente.choices,
+        default=TipoCliente.PARTICULAR
     )
     medio_comunicacion = models.CharField(
         max_length=10,

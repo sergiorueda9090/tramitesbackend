@@ -11,7 +11,7 @@ from django.db import DatabaseError
 from django.db.models import Q, Count, Prefetch
 from datetime import datetime
 
-from clientes.models import Cliente, MedioComunicacion, PrecioCliente
+from clientes.models import Cliente, MedioComunicacion, TipoCliente, PrecioCliente
 from .permissions import RolePermission
 
 
@@ -37,6 +37,8 @@ def serialize_cliente(cliente, include_precios=True, include_precios_info=False,
         'direccion': cliente.direccion,
         'usuario': cliente.usuario_id,
         'usuario_name': f"{cliente.usuario.first_name} {cliente.usuario.last_name}".strip() if cliente.usuario else None,
+        'tipo_cliente': cliente.tipo_cliente,
+        'tipo_cliente_display': cliente.get_tipo_cliente_display(),
         'medio_comunicacion': cliente.medio_comunicacion,
         'medio_comunicacion_display': cliente.get_medio_comunicacion_display(),
         'created_by': cliente.created_by_id,
@@ -78,6 +80,7 @@ def create_client(request):
         color = request.data.get('color', '#1976d2')
         telefono = request.data.get('telefono', '')
         direccion = request.data.get('direccion', '')
+        tipo_cliente = request.data.get('tipo_cliente', TipoCliente.PARTICULAR)
         medio_comunicacion = request.data.get('medio_comunicacion', MedioComunicacion.EMAIL)
         precios_data = request.data.get('precios', [])
 
@@ -96,6 +99,13 @@ def create_client(request):
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
+        # Validar tipo_cliente
+        if tipo_cliente not in [c[0] for c in TipoCliente.choices]:
+            return Response(
+                {"error": f"Tipo de cliente debe ser: {', '.join([c[0] for c in TipoCliente.choices])}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Validar medio_comunicacion
         if medio_comunicacion not in [c[0] for c in MedioComunicacion.choices]:
             return Response(
@@ -108,6 +118,7 @@ def create_client(request):
             nombre=nombre,
             telefono=telefono,
             direccion=direccion,
+            tipo_cliente=tipo_cliente,
             usuario=request.user,
             medio_comunicacion=medio_comunicacion,
             created_by=request.user
@@ -165,6 +176,11 @@ def list_clients(request):
         medio_filter = request.query_params.get('medio_comunicacion', None)
         if medio_filter:
             clientes = clientes.filter(medio_comunicacion=medio_filter)
+
+        # Filtro por tipo de cliente
+        tipo_cliente_filter = request.query_params.get('tipo_cliente', None)
+        if tipo_cliente_filter:
+            clientes = clientes.filter(tipo_cliente=tipo_cliente_filter)
 
         # Filtro por usuario asignado
         usuario_filter = request.query_params.get('usuario', None)
@@ -244,12 +260,20 @@ def get_client(request, pk):
 def update_client(request, pk):
     """Actualizar un cliente"""
     try:
-        cliente = get_object_or_404(Cliente.objects, pk=pk)
+        cliente           = get_object_or_404(Cliente.objects, pk=pk)
 
-        cliente.nombre = request.data.get('nombre', cliente.nombre)
-        cliente.telefono = request.data.get('telefono', cliente.telefono)
+        cliente.nombre    = request.data.get('nombre', cliente.nombre)
+        cliente.telefono  = request.data.get('telefono', cliente.telefono)
         cliente.direccion = request.data.get('direccion', cliente.direccion)
-        cliente.color = request.data.get('color', cliente.color)
+        cliente.color     = request.data.get('color', cliente.color)
+
+        tipo_cliente = request.data.get('tipo_cliente', cliente.tipo_cliente)
+        if tipo_cliente not in [c[0] for c in TipoCliente.choices]:
+            return Response(
+                {"error": f"Tipo de cliente debe ser: {', '.join([c[0] for c in TipoCliente.choices])}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        cliente.tipo_cliente = tipo_cliente
 
         medio_comunicacion = request.data.get('medio_comunicacion', cliente.medio_comunicacion)
         if medio_comunicacion not in [c[0] for c in MedioComunicacion.choices]:
@@ -278,10 +302,10 @@ def update_client(request, pk):
                         )
 
             for precio_data in precios_data:
-                precio_id = precio_data.get('id')
+                precio_id   = precio_data.get('id')
                 descripcion = precio_data.get('descripcion')
-                precio_lay = precio_data.get('precio_lay')
-                comision = precio_data.get('comision')
+                precio_lay  = precio_data.get('precio_lay')
+                comision    = precio_data.get('comision')
 
                 if precio_id:
                     # Actualizar precio existente
@@ -411,6 +435,7 @@ def client_history(request, pk):
                 'telefono': h.telefono,
                 'direccion': h.direccion,
                 'color': h.color,
+                'tipo_cliente': h.tipo_cliente,
                 'medio_comunicacion': h.medio_comunicacion,
             })
 
@@ -424,7 +449,6 @@ def client_history(request, pk):
 
 
 # ==================== PRECIOS CLIENTE ====================
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
 def add_precio_cliente(request, pk):
@@ -493,7 +517,7 @@ def update_precio_cliente(request, pk, precio_pk):
     """Actualizar un precio de un cliente"""
     try:
         cliente = get_object_or_404(Cliente.objects, pk=pk)
-        precio = get_object_or_404(PrecioCliente.objects.filter(cliente=cliente), pk=precio_pk)
+        precio  = get_object_or_404(PrecioCliente.objects.filter(cliente=cliente), pk=precio_pk)
 
         precio.descripcion = request.data.get('descripcion', precio.descripcion)
         precio.precio_lay = request.data.get('precio_lay', precio.precio_lay)
