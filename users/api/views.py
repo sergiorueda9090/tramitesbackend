@@ -40,6 +40,39 @@ def me_view(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
+# Obtener permisos del usuario autenticado
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_permissions(request):
+    try:
+        user = request.user
+
+        # SuperAdmin tiene acceso total
+        if getattr(user, 'role', None) == 'SuperAdmin':
+            modules = Module.objects.all()
+            data = [
+                {
+                    "module": m.code,
+                    "can_view": True,
+                    "can_create": True,
+                    "can_edit": True,
+                    "can_delete": True,
+                }
+                for m in modules
+            ]
+            return Response(data, status=status.HTTP_200_OK)
+
+        permissions = UserModulePermission.objects.filter(user=user).select_related('module')
+        serializer = UserModulePermissionSerializer(permissions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {"error": f"Error fetching permissions: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 #Crear usuario
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin']), ModulePermission('usuarios', 'create')])

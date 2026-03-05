@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     path('me/',                      views.me_view,     name='me'),
+    path('me/permissions/',          views.my_permissions, name='my_permissions'),
     path('<int:pk>/toggle-status/',  views.toggle_status, name='toggle_status'),
     path('list/',             views.list_users,  name='list_users'),
     path('create/',           views.create_user, name='create_user'),
