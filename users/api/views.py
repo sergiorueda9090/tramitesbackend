@@ -5,9 +5,10 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.hashers import make_password
-from django.db import DatabaseError
-from users.models import User
-from .permissions import RolePermission
+from django.db import DatabaseError, transaction
+from users.models import User, Module, UserModulePermission
+from .permissions import RolePermission, ModulePermission
+from .serializers import ModuleSerializer, UserModulePermissionSerializer
 
 from django.db.models import Q # Importar Q para búsquedas complejas
 from datetime import datetime  # Importar datetime para manejar fechas
@@ -41,7 +42,7 @@ def me_view(request):
 
 #Crear usuario
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin']), ModulePermission('usuarios', 'create')])
 def create_user(request):
     try:
         username    = request.data.get('username')
@@ -101,7 +102,7 @@ def create_user(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin']), ModulePermission('usuarios', 'view')])
 def list_users(request):
     try:
         # 1. Obtener todos los usuarios como un queryset
@@ -216,7 +217,7 @@ def list_users(request):
 
 # Obtener un usuario por ID (admin o contador)
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin']), ModulePermission('usuarios', 'view')])
 def get_user(request, pk):
     try:
         user = get_object_or_404(User, pk=pk)
@@ -238,7 +239,7 @@ def get_user(request, pk):
 
 # Actualizar usuario (solo admin)
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin']), ModulePermission('usuarios', 'edit')])
 def update_user(request, pk):
     try:
         user = get_object_or_404(User, pk=pk)
@@ -284,7 +285,7 @@ def update_user(request, pk):
 
 # Eliminar usuario (solo admin)
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin']), ModulePermission('usuarios', 'delete')])
 def delete_user(request, pk):
     try:
         user = get_object_or_404(User, pk=pk)
@@ -301,7 +302,7 @@ def delete_user(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin']), ModulePermission('usuarios', 'edit')])
 def toggle_status(request, pk):
     try:
         if pk is None:
@@ -324,5 +325,106 @@ def toggle_status(request, pk):
     except Exception as e:
         return Response(
             {"error": f"Error toggling user status: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Listar todos los módulos disponibles
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+def list_modules(request):
+    try:
+        modules = Module.objects.all()
+        serializer = ModuleSerializer(modules, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {"error": f"Error fetching modules: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Obtener permisos de un usuario
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+def get_user_permissions(request, pk):
+    try:
+        user = get_object_or_404(User, pk=pk)
+        permissions = UserModulePermission.objects.filter(user=user).select_related('module')
+        serializer = UserModulePermissionSerializer(permissions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {"error": f"Error fetching user permissions: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Guardar permisos de un usuario
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+def save_user_permissions(request, pk):
+    try:
+        user = get_object_or_404(User, pk=pk)
+        permissions_data = request.data
+
+        if not isinstance(permissions_data, list):
+            return Response(
+                {"error": "Se esperaba una lista de permisos."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validar que los módulos existan
+        module_codes = [p.get('module') for p in permissions_data]
+        existing_modules = Module.objects.filter(code__in=module_codes)
+        existing_codes = set(existing_modules.values_list('code', flat=True))
+        invalid_codes = set(module_codes) - existing_codes
+        if invalid_codes:
+            return Response(
+                {"error": f"Módulos no válidos: {', '.join(invalid_codes)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Crear mapa code -> module
+        module_map = {m.code: m for m in existing_modules}
+
+        with transaction.atomic():
+            # Eliminar permisos existentes
+            UserModulePermission.objects.filter(user=user).delete()
+
+            # Crear nuevos permisos (solo los que tienen al menos un permiso en true)
+            new_permissions = []
+            for perm in permissions_data:
+                can_view = perm.get('can_view', False)
+                can_create = perm.get('can_create', False)
+                can_edit = perm.get('can_edit', False)
+                can_delete = perm.get('can_delete', False)
+
+                if can_view or can_create or can_edit or can_delete:
+                    new_permissions.append(UserModulePermission(
+                        user=user,
+                        module=module_map[perm['module']],
+                        can_view=can_view,
+                        can_create=can_create,
+                        can_edit=can_edit,
+                        can_delete=can_delete,
+                    ))
+
+            if new_permissions:
+                UserModulePermission.objects.bulk_create(new_permissions)
+
+        # Retornar permisos guardados
+        saved = UserModulePermission.objects.filter(user=user).select_related('module')
+        serializer = UserModulePermissionSerializer(saved, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except DatabaseError as e:
+        return Response(
+            {"error": f"Error de base de datos: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error saving permissions: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

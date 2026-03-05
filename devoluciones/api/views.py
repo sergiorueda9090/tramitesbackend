@@ -12,7 +12,7 @@ from decimal import Decimal
 from ..models import Devolucion
 from tarjetas.models import Tarjeta
 from clientes.models import Cliente
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
@@ -52,7 +52,7 @@ def serialize_devolucion(devolucion):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('devoluciones', 'create')])
 def create_devolucion(request):
     """Crear una nueva devolución"""
     try:
@@ -131,7 +131,7 @@ def create_devolucion(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('devoluciones', 'view')])
 def list_devoluciones(request):
     """Listar devoluciones con filtros y paginación"""
     try:
@@ -243,7 +243,7 @@ def list_devoluciones(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('devoluciones', 'view')])
 def get_devolucion(request, pk):
     """Obtener una devolución por ID"""
     try:
@@ -260,7 +260,7 @@ def get_devolucion(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('devoluciones', 'edit')])
 def update_devolucion(request, pk):
     """Actualizar una devolución"""
     try:
@@ -329,7 +329,7 @@ def update_devolucion(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('devoluciones', 'delete')])
 def delete_devolucion(request, pk):
     """Eliminar una devolución (soft delete)"""
     try:
@@ -347,7 +347,7 @@ def delete_devolucion(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('devoluciones', 'delete')])
 def restore_devolucion(request, pk):
     """Restaurar una devolución eliminada"""
     try:
@@ -367,7 +367,7 @@ def restore_devolucion(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('devoluciones', 'delete')])
 def hard_delete_devolucion(request, pk):
     """Eliminar permanentemente una devolución"""
     try:
@@ -385,7 +385,7 @@ def hard_delete_devolucion(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('devoluciones', 'view')])
 def devolucion_history(request, pk):
     """Obtener el historial de cambios de una devolución"""
     try:

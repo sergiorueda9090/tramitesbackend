@@ -10,7 +10,7 @@ from datetime import datetime
 
 from proveedores.models import Proveedor
 from etiquetas.models import Etiqueta
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def serialize_proveedor(proveedor):
@@ -31,7 +31,7 @@ def serialize_proveedor(proveedor):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('proveedores', 'create')])
 def create_proveedor(request):
     """Crear un nuevo proveedor"""
     try:
@@ -71,7 +71,7 @@ def create_proveedor(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('proveedores', 'view')])
 def list_proveedores(request):
     """Listar proveedores con filtros y paginacion"""
     try:
@@ -142,7 +142,7 @@ def list_proveedores(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('proveedores', 'view')])
 def get_proveedor(request, pk):
     """Obtener un proveedor por ID"""
     try:
@@ -156,7 +156,7 @@ def get_proveedor(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('proveedores', 'edit')])
 def update_proveedor(request, pk):
     """Actualizar un proveedor"""
     try:
@@ -189,7 +189,7 @@ def update_proveedor(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('proveedores', 'delete')])
 def delete_proveedor(request, pk):
     """Eliminar un proveedor (soft delete)"""
     try:
@@ -207,7 +207,7 @@ def delete_proveedor(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('proveedores', 'delete')])
 def restore_proveedor(request, pk):
     """Restaurar un proveedor eliminado"""
     try:
@@ -227,7 +227,7 @@ def restore_proveedor(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('proveedores', 'delete')])
 def hard_delete_proveedor(request, pk):
     """Eliminar permanentemente un proveedor"""
     try:
@@ -245,7 +245,7 @@ def hard_delete_proveedor(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('proveedores', 'view')])
 def proveedor_history(request, pk):
     """Obtener el historial de cambios de un proveedor"""
     try:

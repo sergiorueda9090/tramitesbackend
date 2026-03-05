@@ -10,7 +10,7 @@ from django.utils import timezone
 from datetime import datetime
 
 from ..models import Tarjeta
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def serialize_tarjeta(tarjeta):
@@ -33,7 +33,7 @@ def serialize_tarjeta(tarjeta):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('tarjetas', 'create')])
 def create_tarjeta(request):
     """Crear una nueva tarjeta"""
     try:
@@ -76,7 +76,7 @@ def create_tarjeta(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('tarjetas', 'view')])
 def list_tarjetas(request):
     """Listar tarjetas con filtros y paginación"""
     try:
@@ -151,7 +151,7 @@ def list_tarjetas(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('tarjetas', 'view')])
 def get_tarjeta(request, pk):
     """Obtener una tarjeta por ID"""
     try:
@@ -168,7 +168,7 @@ def get_tarjeta(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('tarjetas', 'edit')])
 def update_tarjeta(request, pk):
     """Actualizar una tarjeta"""
     try:
@@ -205,7 +205,7 @@ def update_tarjeta(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarjetas', 'delete')])
 def delete_tarjeta(request, pk):
     """Eliminar una tarjeta (soft delete)"""
     try:
@@ -224,7 +224,7 @@ def delete_tarjeta(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarjetas', 'delete')])
 def restore_tarjeta(request, pk):
     """Restaurar una tarjeta eliminada"""
     try:
@@ -245,7 +245,7 @@ def restore_tarjeta(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarjetas', 'delete')])
 def hard_delete_tarjeta(request, pk):
     """Eliminar permanentemente una tarjeta"""
     try:
@@ -263,7 +263,7 @@ def hard_delete_tarjeta(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarjetas', 'view')])
 def tarjeta_history(request, pk):
     """Obtener el historial de cambios de una tarjeta"""
     try:

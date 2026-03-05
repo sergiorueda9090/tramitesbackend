@@ -9,7 +9,7 @@ from django.db.models import Q
 from datetime import datetime
 
 from ..models import Cotizador, CotizadorPagos
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def serialize_cotizador(cotizador):
@@ -71,7 +71,7 @@ def serialize_pago(pago):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'create')])
 def create_cotizador(request):
     """Crear un nuevo cotizador"""
     try:
@@ -122,7 +122,7 @@ def create_cotizador(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('cotizador', 'view')])
 def list_cotizadores(request):
     """Listar cotizadores con filtros y paginación"""
     try:
@@ -222,7 +222,7 @@ def list_cotizadores(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('cotizador', 'view')])
 def get_cotizador(request, pk):
     """Obtener un cotizador por ID"""
     try:
@@ -239,7 +239,7 @@ def get_cotizador(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'edit')])
 def update_cotizador(request, pk):
     """Actualizar un cotizador"""
     try:
@@ -291,7 +291,7 @@ def update_cotizador(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
 def delete_cotizador(request, pk):
     """Eliminar un cotizador (soft delete)"""
     try:
@@ -309,7 +309,7 @@ def delete_cotizador(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
 def restore_cotizador(request, pk):
     """Restaurar un cotizador eliminado"""
     try:
@@ -329,7 +329,7 @@ def restore_cotizador(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
 def hard_delete_cotizador(request, pk):
     """Eliminar permanentemente un cotizador"""
     try:
@@ -347,7 +347,7 @@ def hard_delete_cotizador(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
 def cotizador_history(request, pk):
     """Obtener el historial de cambios de un cotizador"""
     try:
@@ -415,7 +415,7 @@ ESTADO_TRANSICIONES = {
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'edit')])
 def cambiar_estado(request, pk):
     """
     Cambiar el estado del cotizador al siguiente paso.
@@ -479,7 +479,7 @@ def cambiar_estado(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'edit')])
 def revertir_estado(request, pk):
     """
     Revertir el estado del cotizador al paso anterior.
@@ -556,7 +556,7 @@ def revertir_estado(request, pk):
 # ==================== PAGOS ====================
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cotizador', 'create')])
 def create_pago(request, cotizador_pk):
     """Crear un nuevo pago para un cotizador"""
     try:
@@ -592,7 +592,7 @@ def create_pago(request, cotizador_pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('cotizador', 'view')])
 def list_pagos(request, cotizador_pk):
     """Listar pagos de un cotizador"""
     try:
@@ -621,7 +621,7 @@ def list_pagos(request, cotizador_pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cotizador', 'edit')])
 def update_pago(request, pk):
     """Actualizar un pago"""
     try:
@@ -648,7 +648,7 @@ def update_pago(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
 def delete_pago(request, pk):
     """Eliminar un pago (soft delete)"""
     try:

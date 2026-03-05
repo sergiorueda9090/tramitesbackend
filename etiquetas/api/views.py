@@ -9,7 +9,7 @@ from django.db.models import Q
 from datetime import datetime
 
 from etiquetas.models import Etiqueta
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def serialize_etiqueta(etiqueta):
@@ -27,7 +27,7 @@ def serialize_etiqueta(etiqueta):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('etiquetas', 'create')])
 def create_etiqueta(request):
     """Crear una nueva etiqueta"""
     try:
@@ -61,7 +61,7 @@ def create_etiqueta(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('etiquetas', 'view')])
 def list_etiquetas(request):
     """Listar etiquetas con filtros y paginación"""
     try:
@@ -127,7 +127,7 @@ def list_etiquetas(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('etiquetas', 'view')])
 def get_etiqueta(request, pk):
     """Obtener una etiqueta por ID"""
     try:
@@ -141,7 +141,7 @@ def get_etiqueta(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('etiquetas', 'edit')])
 def update_etiqueta(request, pk):
     """Actualizar una etiqueta"""
     try:
@@ -167,7 +167,7 @@ def update_etiqueta(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('etiquetas', 'delete')])
 def delete_etiqueta(request, pk):
     """Eliminar una etiqueta (soft delete)"""
     try:
@@ -185,7 +185,7 @@ def delete_etiqueta(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('etiquetas', 'delete')])
 def restore_etiqueta(request, pk):
     """Restaurar una etiqueta eliminada"""
     try:
@@ -205,7 +205,7 @@ def restore_etiqueta(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('etiquetas', 'delete')])
 def hard_delete_etiqueta(request, pk):
     """Eliminar permanentemente una etiqueta"""
     try:
@@ -223,7 +223,7 @@ def hard_delete_etiqueta(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('etiquetas', 'view')])
 def etiqueta_history(request, pk):
     """Obtener el historial de cambios de una etiqueta"""
     try:

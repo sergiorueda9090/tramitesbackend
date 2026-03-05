@@ -9,7 +9,7 @@ from django.db.models import Q
 from datetime import datetime
 
 from ..models import TarifarioSoat
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def serialize_tarifario(tarifario):
@@ -30,7 +30,7 @@ def serialize_tarifario(tarifario):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('tarifario_soat', 'create')])
 def create_tarifario(request):
     """Crear un nuevo tarifario SOAT"""
     try:
@@ -70,7 +70,7 @@ def create_tarifario(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('tarifario_soat', 'view')])
 def list_tarifarios(request):
     """Listar tarifarios SOAT con filtros y paginación"""
     try:
@@ -139,7 +139,7 @@ def list_tarifarios(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('tarifario_soat', 'view')])
 def get_tarifario(request, pk):
     """Obtener un tarifario SOAT por ID"""
     try:
@@ -156,7 +156,7 @@ def get_tarifario(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('tarifario_soat', 'edit')])
 def update_tarifario(request, pk):
     """Actualizar un tarifario SOAT"""
     try:
@@ -183,7 +183,7 @@ def update_tarifario(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarifario_soat', 'delete')])
 def delete_tarifario(request, pk):
     """Eliminar un tarifario SOAT (soft delete)"""
     try:
@@ -201,7 +201,7 @@ def delete_tarifario(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarifario_soat', 'delete')])
 def restore_tarifario(request, pk):
     """Restaurar un tarifario SOAT eliminado"""
     try:
@@ -221,7 +221,7 @@ def restore_tarifario(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarifario_soat', 'delete')])
 def hard_delete_tarifario(request, pk):
     """Eliminar permanentemente un tarifario SOAT"""
     try:
@@ -239,7 +239,7 @@ def hard_delete_tarifario(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('tarifario_soat', 'view')])
 def tarifario_history(request, pk):
     """Obtener el historial de cambios de un tarifario SOAT"""
     try:

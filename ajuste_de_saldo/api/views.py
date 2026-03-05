@@ -9,7 +9,7 @@ from django.db.models import Q
 from datetime import datetime
 
 from ..models import AjusteDeSaldo
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def serialize_ajuste_de_saldo(ajuste):
@@ -34,7 +34,7 @@ def serialize_ajuste_de_saldo(ajuste):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('ajuste_saldo', 'create')])
 def create_ajuste_de_saldo(request):
     """Crear un nuevo ajuste de saldo"""
     try:
@@ -69,7 +69,7 @@ def create_ajuste_de_saldo(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('ajuste_saldo', 'view')])
 def list_ajustes_de_saldo(request):
     """Listar ajustes de saldo con filtros y paginación"""
     try:
@@ -174,7 +174,7 @@ def list_ajustes_de_saldo(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('ajuste_saldo', 'view')])
 def get_ajuste_de_saldo(request, pk):
     """Obtener un ajuste de saldo por ID"""
     try:
@@ -191,7 +191,7 @@ def get_ajuste_de_saldo(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('ajuste_saldo', 'edit')])
 def update_ajuste_de_saldo(request, pk):
     """Actualizar un ajuste de saldo"""
     try:
@@ -223,7 +223,7 @@ def update_ajuste_de_saldo(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('ajuste_saldo', 'delete')])
 def delete_ajuste_de_saldo(request, pk):
     """Eliminar un ajuste de saldo (soft delete)"""
     try:
@@ -241,7 +241,7 @@ def delete_ajuste_de_saldo(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('ajuste_saldo', 'delete')])
 def restore_ajuste_de_saldo(request, pk):
     """Restaurar un ajuste de saldo eliminado"""
     try:
@@ -261,7 +261,7 @@ def restore_ajuste_de_saldo(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('ajuste_saldo', 'delete')])
 def hard_delete_ajuste_de_saldo(request, pk):
     """Eliminar permanentemente un ajuste de saldo"""
     try:
@@ -279,7 +279,7 @@ def hard_delete_ajuste_de_saldo(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('ajuste_saldo', 'view')])
 def ajuste_de_saldo_history(request, pk):
     """Obtener el historial de cambios de un ajuste de saldo"""
     try:

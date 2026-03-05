@@ -12,7 +12,7 @@ from decimal import Decimal
 from ..models import RecepcionPago
 from tarjetas.models import Tarjeta
 from clientes.models import Cliente
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
@@ -52,7 +52,7 @@ def serialize_recepcion_pago(recepcion):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('recepcion_pagos', 'create')])
 def create_recepcion_pago(request):
     """Crear una nueva recepción de pago"""
     try:
@@ -131,7 +131,7 @@ def create_recepcion_pago(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('recepcion_pagos', 'view')])
 def list_recepciones_pago(request):
     """Listar recepciones de pago con filtros y paginación"""
     try:
@@ -243,7 +243,7 @@ def list_recepciones_pago(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('recepcion_pagos', 'view')])
 def get_recepcion_pago(request, pk):
     """Obtener una recepción de pago por ID"""
     try:
@@ -260,7 +260,7 @@ def get_recepcion_pago(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('recepcion_pagos', 'edit')])
 def update_recepcion_pago(request, pk):
     """Actualizar una recepción de pago"""
     try:
@@ -329,7 +329,7 @@ def update_recepcion_pago(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('recepcion_pagos', 'delete')])
 def delete_recepcion_pago(request, pk):
     """Eliminar una recepción de pago (soft delete)"""
     try:
@@ -347,7 +347,7 @@ def delete_recepcion_pago(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('recepcion_pagos', 'delete')])
 def restore_recepcion_pago(request, pk):
     """Restaurar una recepción de pago eliminada"""
     try:
@@ -367,7 +367,7 @@ def restore_recepcion_pago(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('recepcion_pagos', 'delete')])
 def hard_delete_recepcion_pago(request, pk):
     """Eliminar permanentemente una recepción de pago"""
     try:
@@ -385,7 +385,7 @@ def hard_delete_recepcion_pago(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('recepcion_pagos', 'view')])
 def recepcion_pago_history(request, pk):
     """Obtener el historial de cambios de una recepción de pago"""
     try:

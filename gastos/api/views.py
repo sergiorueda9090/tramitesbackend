@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from ..models import Gasto, GastoRelacion
 from tarjetas.models import Tarjeta
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
@@ -40,7 +40,7 @@ def serialize_gasto(gasto):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('gastos', 'create')])
 def create_gasto(request):
     """Crear un nuevo gasto"""
     try:
@@ -79,7 +79,7 @@ def create_gasto(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('gastos', 'view')])
 def list_gastos(request):
     """Listar gastos con filtros y paginación"""
     try:
@@ -148,7 +148,7 @@ def list_gastos(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('gastos', 'view')])
 def get_gasto(request, pk):
     """Obtener un gasto por ID"""
     try:
@@ -165,7 +165,7 @@ def get_gasto(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('gastos', 'edit')])
 def update_gasto(request, pk):
     """Actualizar un gasto"""
     try:
@@ -191,7 +191,7 @@ def update_gasto(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def delete_gasto(request, pk):
     """Eliminar un gasto (soft delete)"""
     try:
@@ -209,7 +209,7 @@ def delete_gasto(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def restore_gasto(request, pk):
     """Restaurar un gasto eliminado"""
     try:
@@ -229,7 +229,7 @@ def restore_gasto(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def hard_delete_gasto(request, pk):
     """Eliminar permanentemente un gasto"""
     try:
@@ -247,7 +247,7 @@ def hard_delete_gasto(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'view')])
 def gasto_history(request, pk):
     """Obtener el historial de cambios de un gasto"""
     try:
@@ -320,7 +320,7 @@ def serialize_gasto_relacion(relacion):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('gastos', 'create')])
 def create_gasto_relacion(request):
     """Crear una nueva relación de gasto"""
     try:
@@ -398,7 +398,7 @@ def create_gasto_relacion(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('gastos', 'view')])
 def list_gasto_relaciones(request):
     """Listar relaciones de gasto con filtros y paginación"""
     try:
@@ -510,7 +510,7 @@ def list_gasto_relaciones(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('gastos', 'view')])
 def get_gasto_relacion(request, pk):
     """Obtener una relación de gasto por ID"""
     try:
@@ -527,7 +527,7 @@ def get_gasto_relacion(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('gastos', 'edit')])
 def update_gasto_relacion(request, pk):
     """Actualizar una relación de gasto"""
     try:
@@ -596,7 +596,7 @@ def update_gasto_relacion(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def delete_gasto_relacion(request, pk):
     """Eliminar una relación de gasto (soft delete)"""
     try:
@@ -614,7 +614,7 @@ def delete_gasto_relacion(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def restore_gasto_relacion(request, pk):
     """Restaurar una relación de gasto eliminada"""
     try:
@@ -634,7 +634,7 @@ def restore_gasto_relacion(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def hard_delete_gasto_relacion(request, pk):
     """Eliminar permanentemente una relación de gasto"""
     try:
@@ -652,7 +652,7 @@ def hard_delete_gasto_relacion(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'view')])
 def gasto_relacion_history(request, pk):
     """Obtener el historial de cambios de una relación de gasto"""
     try:

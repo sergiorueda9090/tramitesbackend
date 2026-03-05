@@ -9,4 +9,7 @@ urlpatterns = [
     path('<int:pk>/',         views.get_user,    name='get_user'),
     path('<int:pk>/update/',  views.update_user, name='update_user'),
     path('<int:pk>/delete/',  views.delete_user, name='delete_user'),
+    path('modules/',                     views.list_modules,          name='list_modules'),
+    path('<int:pk>/permissions/',         views.get_user_permissions,  name='get_user_permissions'),
+    path('<int:pk>/permissions/save/',    views.save_user_permissions, name='save_user_permissions'),
 ]

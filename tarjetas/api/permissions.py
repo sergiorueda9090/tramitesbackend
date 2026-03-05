@@ -16,3 +16,7 @@ def RolePermission(roles):
     class CustomRolePermission(HasRolePermission):
         allowed_roles = roles
     return CustomRolePermission
+
+
+# Re-exportar ModulePermission desde users
+from users.api.permissions import ModulePermission  # noqa: F401

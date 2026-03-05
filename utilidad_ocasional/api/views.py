@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from ..models import UtilidadOcasional
 from tarjetas.models import Tarjeta
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
@@ -47,7 +47,7 @@ def serialize_utilidad_ocasional(utilidad):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('utilidad_ocasional', 'create')])
 def create_utilidad_ocasional(request):
     """Crear una nueva utilidad ocasional"""
     try:
@@ -110,7 +110,7 @@ def create_utilidad_ocasional(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('utilidad_ocasional', 'view')])
 def list_utilidades_ocasionales(request):
     """Listar utilidades ocasionales con filtros y paginación"""
     try:
@@ -216,7 +216,7 @@ def list_utilidades_ocasionales(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('utilidad_ocasional', 'view')])
 def get_utilidad_ocasional(request, pk):
     """Obtener una utilidad ocasional por ID"""
     try:
@@ -233,7 +233,7 @@ def get_utilidad_ocasional(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('utilidad_ocasional', 'edit')])
 def update_utilidad_ocasional(request, pk):
     """Actualizar una utilidad ocasional"""
     try:
@@ -285,7 +285,7 @@ def update_utilidad_ocasional(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('utilidad_ocasional', 'delete')])
 def delete_utilidad_ocasional(request, pk):
     """Eliminar una utilidad ocasional (soft delete)"""
     try:
@@ -303,7 +303,7 @@ def delete_utilidad_ocasional(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('utilidad_ocasional', 'delete')])
 def restore_utilidad_ocasional(request, pk):
     """Restaurar una utilidad ocasional eliminada"""
     try:
@@ -323,7 +323,7 @@ def restore_utilidad_ocasional(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('utilidad_ocasional', 'delete')])
 def hard_delete_utilidad_ocasional(request, pk):
     """Eliminar permanentemente una utilidad ocasional"""
     try:
@@ -341,7 +341,7 @@ def hard_delete_utilidad_ocasional(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('utilidad_ocasional', 'view')])
 def utilidad_ocasional_history(request, pk):
     """Obtener el historial de cambios de una utilidad ocasional"""
     try:

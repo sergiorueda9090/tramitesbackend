@@ -12,7 +12,7 @@ from django.db.models import Q, Count, Prefetch
 from datetime import datetime
 
 from clientes.models import Cliente, MedioComunicacion, TipoCliente, PrecioCliente
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def serialize_precio(precio):
@@ -66,7 +66,7 @@ def serialize_cliente(cliente, include_precios=True, include_precios_info=False,
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'create')])
 def create_client(request):
     """Crear un nuevo cliente con sus precios"""
     try:
@@ -153,7 +153,7 @@ def create_client(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'auxiliar', 'vendedor'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'auxiliar', 'vendedor']), ModulePermission('clientes', 'view')])
 def list_clients(request):
     """Listar clientes con filtros y paginación"""
     try:
@@ -242,7 +242,7 @@ def list_clients(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'auxiliar', 'vendedor'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'auxiliar', 'vendedor']), ModulePermission('clientes', 'view')])
 def get_client(request, pk):
     """Obtener un cliente por ID"""
     try:
@@ -256,7 +256,7 @@ def get_client(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'edit')])
 def update_client(request, pk):
     """Actualizar un cliente"""
     try:
@@ -345,7 +345,7 @@ def update_client(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'delete')])
 def delete_client(request, pk):
     """Eliminar un cliente (soft delete)"""
     try:
@@ -363,7 +363,7 @@ def delete_client(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'delete')])
 def restore_client(request, pk):
     """Restaurar un cliente eliminado"""
     try:
@@ -383,7 +383,7 @@ def restore_client(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'delete')])
 def hard_delete_client(request, pk):
     """Eliminar permanentemente un cliente"""
     try:
@@ -401,7 +401,7 @@ def hard_delete_client(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'view')])
 def client_history(request, pk):
     """Obtener el historial de cambios de un cliente"""
     try:
@@ -450,7 +450,7 @@ def client_history(request, pk):
 
 # ==================== PRECIOS CLIENTE ====================
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'create')])
 def add_precio_cliente(request, pk):
     """Agregar un precio a un cliente"""
     try:
@@ -494,7 +494,7 @@ def add_precio_cliente(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('clientes', 'view')])
 def list_precios_cliente(request, pk):
     """Listar precios de un cliente"""
     try:
@@ -512,7 +512,7 @@ def list_precios_cliente(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'edit')])
 def update_precio_cliente(request, pk, precio_pk):
     """Actualizar un precio de un cliente"""
     try:
@@ -540,7 +540,7 @@ def update_precio_cliente(request, pk, precio_pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('clientes', 'delete')])
 def delete_precio_cliente(request, pk, precio_pk):
     """Eliminar un precio de un cliente (soft delete)"""
     try:

@@ -12,7 +12,7 @@ from decimal import Decimal
 from ..models import CargoNoRegistrado
 from tarjetas.models import Tarjeta
 from clientes.models import Cliente
-from .permissions import RolePermission
+from .permissions import RolePermission, ModulePermission
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
@@ -52,7 +52,7 @@ def serialize_cargo_no_registrado(cargo):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cargos_no_registrados', 'create')])
 def create_cargo_no_registrado(request):
     """Crear un nuevo cargo no registrado"""
     try:
@@ -131,7 +131,7 @@ def create_cargo_no_registrado(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('cargos_no_registrados', 'view')])
 def list_cargos_no_registrados(request):
     """Listar cargos no registrados con filtros y paginación"""
     try:
@@ -243,7 +243,7 @@ def list_cargos_no_registrados(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, ModulePermission('cargos_no_registrados', 'view')])
 def get_cargo_no_registrado(request, pk):
     """Obtener un cargo no registrado por ID"""
     try:
@@ -260,7 +260,7 @@ def get_cargo_no_registrado(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cargos_no_registrados', 'edit')])
 def update_cargo_no_registrado(request, pk):
     """Actualizar un cargo no registrado"""
     try:
@@ -329,7 +329,7 @@ def update_cargo_no_registrado(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cargos_no_registrados', 'delete')])
 def delete_cargo_no_registrado(request, pk):
     """Eliminar un cargo no registrado (soft delete)"""
     try:
@@ -347,7 +347,7 @@ def delete_cargo_no_registrado(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cargos_no_registrados', 'delete')])
 def restore_cargo_no_registrado(request, pk):
     """Restaurar un cargo no registrado eliminado"""
     try:
@@ -367,7 +367,7 @@ def restore_cargo_no_registrado(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cargos_no_registrados', 'delete')])
 def hard_delete_cargo_no_registrado(request, pk):
     """Eliminar permanentemente un cargo no registrado"""
     try:
@@ -385,7 +385,7 @@ def hard_delete_cargo_no_registrado(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin'])])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cargos_no_registrados', 'view')])
 def cargo_no_registrado_history(request, pk):
     """Obtener el historial de cambios de un cargo no registrado"""
     try:
