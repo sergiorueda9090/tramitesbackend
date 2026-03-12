@@ -21,4 +21,7 @@ urlpatterns = [
     path('<int:cotizador_pk>/pagos/create/', views.create_pago,  name='create_pago'),
     path('pagos/<int:pk>/update/',           views.update_pago,  name='update_pago'),
     path('pagos/<int:pk>/delete/',           views.delete_pago,  name='delete_pago'),
+
+    # APIs externas
+    path('external/runt/', views.external_placa_documento_runt, name='external_placa_documento_runt'),
 ]
