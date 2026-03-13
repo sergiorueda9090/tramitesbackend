@@ -23,5 +23,9 @@ urlpatterns = [
     path('pagos/<int:pk>/delete/',           views.delete_pago,  name='delete_pago'),
 
     # APIs externas
-    path('external/runt/', views.external_placa_documento_runt, name='external_placa_documento_runt'),
+    path('external/runt/',     views.external_placa_documento_runt, name='external_placa_documento_runt'),
+    path('tarjeta_propiedad/', views.external_placa_runt, name='external_placa_runt'),
+    path('vin/',               views.external_vin, name='external_vin'),
+    path('runt_vin/',          views.external_runt_vin, name='external_runt_vin'),
+    path('api_falabella/',     views.api_falabella, name='api_falabella'),
 ]

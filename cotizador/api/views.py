@@ -716,3 +716,184 @@ def external_placa_documento_runt(request):
             {"error": f"Error inesperado al consultar RUNT: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+def external_placa_runt(request):
+    """
+    Recibe una imagen de tarjeta de propiedad (multipart/form-data)
+    y la reenvía al servicio externo de IA para extraer placa, tipo_documento y nro_documento.
+    """
+    imagen = request.FILES.get('imagen')
+    if not imagen:
+        return Response(
+            {"error": "El campo 'imagen' es requerido."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    url = "http://190.120.231.117:8080/api/tarjeta_propiedad"
+
+    try:
+        imagen_bytes = imagen.read()
+        boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
+
+        body = (
+            f'--{boundary}\r\n'
+            f'Content-Disposition: form-data; name="imagen"; filename="{imagen.name}"\r\n'
+            f'Content-Type: {imagen.content_type}\r\n\r\n'
+        ).encode('utf-8') + imagen_bytes + f'\r\n--{boundary}--\r\n'.encode('utf-8')
+
+        req = urllib.request.Request(url, data=body, method='POST')
+        req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+        req.add_header('Accept', 'application/json')
+
+        with urllib.request.urlopen(req, timeout=60) as response:
+            data = json.loads(response.read().decode('utf-8'))
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    except urllib.error.HTTPError as e:
+        body_resp = e.read().decode('utf-8', errors='replace')
+        return Response(
+            {"error": f"Error del servicio de IA: {e.code}", "detalle": body_resp},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+        )
+    except urllib.error.URLError as e:
+        return Response(
+            {"error": f"No se pudo conectar al servicio de IA: {str(e.reason)}"},
+            status=status.HTTP_502_BAD_GATEWAY
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado al procesar tarjeta de propiedad: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+def external_vin(request):
+    """
+    Recibe una imagen de tarjeta de propiedad (multipart/form-data)
+    y la reenvía al servicio externo de IA para extraer placa, tipo_documento y nro_documento.
+    """
+    imagen = request.FILES.get('imagen')
+    if not imagen:
+        return Response(
+            {"error": "El campo 'imagen' es requerido."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    url = "http://190.120.231.117:8080/api/vin"
+
+    try:
+        imagen_bytes = imagen.read()
+        boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
+
+        body = (
+            f'--{boundary}\r\n'
+            f'Content-Disposition: form-data; name="imagen"; filename="{imagen.name}"\r\n'
+            f'Content-Type: {imagen.content_type}\r\n\r\n'
+        ).encode('utf-8') + imagen_bytes + f'\r\n--{boundary}--\r\n'.encode('utf-8')
+
+        req = urllib.request.Request(url, data=body, method='POST')
+        req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+        req.add_header('Accept', 'application/json')
+
+        with urllib.request.urlopen(req, timeout=60) as response:
+            data = json.loads(response.read().decode('utf-8'))
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    except urllib.error.HTTPError as e:
+        body_resp = e.read().decode('utf-8', errors='replace')
+        return Response(
+            {"error": f"Error del servicio de IA: {e.code}", "detalle": body_resp},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+        )
+    except urllib.error.URLError as e:
+        return Response(
+            {"error": f"No se pudo conectar al servicio de IA: {str(e.reason)}"},
+            status=status.HTTP_502_BAD_GATEWAY
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado al procesar tarjeta de propiedad: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
+def external_runt_vin(request):
+    
+    runt = request.data.get('runt', None)
+
+    if not runt:
+        return Response(
+            {"error": "Se requiere el parámetro 'runt'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Construir URL del servicio RUNT externo
+    url = f"http://190.120.231.117:8080/api/runt/{runt}"
+
+    try:
+        req = urllib.request.Request(url, method='GET')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        return Response(data, status=status.HTTP_200_OK)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        return Response(
+            {"error": f"Error del servicio RUNT: {e.code}", "detalle": body},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+        )
+    except urllib.error.URLError as e:
+        return Response(
+            {"error": f"No se pudo conectar al servicio RUNT: {str(e.reason)}"},
+            status=status.HTTP_502_BAD_GATEWAY
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado al consultar RUNT: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
+def api_falabella(request):
+    placa = request.query_params.get('placa', None)
+
+    if not placa:
+        return Response(
+            {"error": "Se requiere el parámetro 'placa'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Construir URL del servicio RUNT externo
+    url = f"http://190.120.231.117:8080/api/previsora/{placa}"
+
+    try:
+        req = urllib.request.Request(url, method='GET')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        return Response(data, status=status.HTTP_200_OK)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        return Response(
+            {"error": f"Error del servicio placa: {e.code}", "detalle": body},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+        )
+    except urllib.error.URLError as e:
+        return Response(
+            {"error": f"No se pudo conectar al servicio placa: {str(e.reason)}"},
+            status=status.HTTP_502_BAD_GATEWAY
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado al consultar placa: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
