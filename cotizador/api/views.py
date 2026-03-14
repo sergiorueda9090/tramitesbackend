@@ -717,6 +717,44 @@ def external_placa_documento_runt(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
+def get_user_info_external(request):
+    
+    numero_documento = request.query_params.get('numero_documento', None)
+
+    if not numero_documento:
+        return Response(
+            {"error": "Se requiere el parámetro 'numero_documento'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Construir URL del servicio RUNT externo
+    url = f"http://190.120.231.117:8080/api/runt/{numero_documento}"
+
+    try:
+        req = urllib.request.Request(url, method='GET')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        return Response(data, status=status.HTTP_200_OK)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        return Response(
+            {"error": f"Error del servicio RUNT: {e.code}", "detalle": body},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+        )
+    except urllib.error.URLError as e:
+        return Response(
+            {"error": f"No se pudo conectar al servicio RUNT: {str(e.reason)}"},
+            status=status.HTTP_502_BAD_GATEWAY
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado al consultar RUNT: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
@@ -823,43 +861,6 @@ def external_vin(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
     
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
-def external_runt_vin(request):
-    
-    runt = request.data.get('runt', None)
-
-    if not runt:
-        return Response(
-            {"error": "Se requiere el parámetro 'runt'."},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    # Construir URL del servicio RUNT externo
-    url = f"http://190.120.231.117:8080/api/runt/{runt}"
-
-    try:
-        req = urllib.request.Request(url, method='GET')
-        req.add_header('Accept', 'application/json')
-        with urllib.request.urlopen(req, timeout=30) as response:
-            data = json.loads(response.read().decode('utf-8'))
-        return Response(data, status=status.HTTP_200_OK)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')
-        return Response(
-            {"error": f"Error del servicio RUNT: {e.code}", "detalle": body},
-            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
-        )
-    except urllib.error.URLError as e:
-        return Response(
-            {"error": f"No se pudo conectar al servicio RUNT: {str(e.reason)}"},
-            status=status.HTTP_502_BAD_GATEWAY
-        )
-    except Exception as e:
-        return Response(
-            {"error": f"Error inesperado al consultar RUNT: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])

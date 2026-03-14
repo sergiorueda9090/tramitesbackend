@@ -26,6 +26,6 @@ urlpatterns = [
     path('external/runt/',     views.external_placa_documento_runt, name='external_placa_documento_runt'),
     path('tarjeta_propiedad/', views.external_placa_runt, name='external_placa_runt'),
     path('vin/',               views.external_vin, name='external_vin'),
-    path('runt_vin/',          views.external_runt_vin, name='external_runt_vin'),
+    path('get_user_info_external/',          views.get_user_info_external, name='get_user_info_external'),
     path('api_falabella/',     views.api_falabella, name='api_falabella'),
 ]
