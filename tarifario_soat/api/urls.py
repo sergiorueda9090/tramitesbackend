@@ -10,4 +10,5 @@ urlpatterns = [
     path('<int:pk>/restore/',       views.restore_tarifario,    name='restore_tarifario'),
     path('<int:pk>/hard-delete/',   views.hard_delete_tarifario, name='hard_delete_tarifario'),
     path('<int:pk>/history/',       views.tarifario_history,    name='tarifario_history'),
+    path('bulk-create/',            views.bulk_create_tarifario, name='bulk_create_tarifario'),
 ]

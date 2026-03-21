@@ -4,8 +4,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Q
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 
 from ..models import TarifarioSoat
@@ -277,5 +278,97 @@ def tarifario_history(request, pk):
     except Exception as e:
         return Response(
             {"error": f"Error al obtener historial: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('tarifario_soat', 'create')])
+def bulk_create_tarifario(request):
+    """Crear múltiples tarifarios SOAT desde carga masiva (Excel)"""
+    try:
+        registros = request.data.get('registros', [])
+
+        if not isinstance(registros, list) or len(registros) == 0:
+            return Response(
+                {"error": "Debe enviar una lista de registros en el campo 'registros'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        errores = []
+        registros_validos = []
+
+        for index, registro in enumerate(registros):
+            fila = index + 2  # +2 porque fila 1 es el header del Excel
+            mensajes = []
+
+            # Validar codigo_tarifa (obligatorio)
+            codigo_tarifa = str(registro.get('codigo_tarifa', '')).strip()
+            if not codigo_tarifa:
+                mensajes.append('Código tarifa es obligatorio')
+
+            # Validar valor (obligatorio y numérico)
+            valor_raw = str(registro.get('valor', '')).strip()
+            valor = None
+            if not valor_raw:
+                mensajes.append('Valor es obligatorio')
+            else:
+                try:
+                    valor = Decimal(valor_raw)
+                    if valor < 0:
+                        mensajes.append('Valor no puede ser negativo')
+                except InvalidOperation:
+                    mensajes.append('Valor debe ser un número válido')
+
+            # Descripcion es opcional
+            descripcion = str(registro.get('descripcion', '')).strip()
+
+            if mensajes:
+                errores.append({
+                    'fila': fila,
+                    'codigo_tarifa': codigo_tarifa,
+                    'descripcion': descripcion,
+                    'valor': valor_raw,
+                    'mensajes': mensajes,
+                })
+            else:
+                registros_validos.append({
+                    'codigo_tarifa': codigo_tarifa,
+                    'descripcion': descripcion,
+                    'valor': valor,
+                })
+
+        # Si hay errores, no crear nada
+        if errores:
+            return Response(
+                {"errores": errores, "total_errores": len(errores)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Crear todos los registros en una transacción atómica
+        creados = []
+        with transaction.atomic():
+            for datos in registros_validos:
+                tarifario = TarifarioSoat.objects.create(
+                    user=request.user,
+                    codigo_tarifa=datos['codigo_tarifa'],
+                    descripcion=datos['descripcion'],
+                    valor=datos['valor'],
+                )
+                creados.append(serialize_tarifario(tarifario))
+
+        return Response(
+            {"message": f"Se crearon {len(creados)} tarifarios correctamente.", "total_creados": len(creados)},
+            status=status.HTTP_201_CREATED
+        )
+
+    except DatabaseError as e:
+        return Response(
+            {"error": f"Error de base de datos: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
