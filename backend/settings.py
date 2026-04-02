@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'utilidad_ocasional',
     'tarifario_soat',
     'base_de_datos',
+    'api_app',
 ]
 
 MIDDLEWARE = [
