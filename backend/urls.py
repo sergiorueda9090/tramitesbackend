@@ -40,4 +40,5 @@ urlpatterns = [
     path('api/tarifario_soat/',     include('tarifario_soat.api.urls'),     name="tarifario_soat"),
     path('api/utilidad_ocasional/', include('utilidad_ocasional.api.urls'), name="utilidad_ocasional"),
     path('api/tarifarios_soat/',     include('tarifario_soat.api.urls'),     name="tarifarios_soat"),
+    path('api/base_de_datos/',       include('base_de_datos.api.urls'),     name="base_de_datos"),
 ]
