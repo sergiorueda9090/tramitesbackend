@@ -22,10 +22,14 @@ urlpatterns = [
     path('pagos/<int:pk>/update/',           views.update_pago,  name='update_pago'),
     path('pagos/<int:pk>/delete/',           views.delete_pago,  name='delete_pago'),
 
+    # APIs externas Cedulas
+    path('get_nombre_cliente/',  views.get_nombre_cliente, name='get_nombre_cliente'),
+
     # APIs externas
     path('external/runt/',     views.external_placa_documento_runt, name='external_placa_documento_runt'),
     path('tarjeta_propiedad/', views.external_placa_runt, name='external_placa_runt'),
     path('vin/',               views.external_vin, name='external_vin'),
+    path('runt_vehiculo_vin/', views.external_runt_vehiculo_vin, name='external_runt_vehiculo_vin'),
     path('get_user_info_external/',          views.get_user_info_external, name='get_user_info_external'),
     path('api_falabella/',     views.api_falabella, name='api_falabella'),
-]
+]   

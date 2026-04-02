@@ -860,7 +860,47 @@ def external_vin(request):
             {"error": f"Error inesperado al procesar tarjeta de propiedad: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-    
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+def external_runt_vehiculo_vin(request):
+    """
+    Consulta datos de un vehículo en el RUNT usando el VIN (17 dígitos).
+    """
+    vin = request.query_params.get('vin', None)
+
+    if not vin:
+        return Response(
+            {"error": "Se requiere el parámetro 'vin'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    url = f"http://190.120.231.117:8080/api/runt_vehiculo_vin/{vin}"
+
+    try:
+        req = urllib.request.Request(url, method='GET')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        return Response(data, status=status.HTTP_200_OK)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        return Response(
+            {"error": f"Error del servicio RUNT VIN: {e.code}", "detalle": body},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+        )
+    except urllib.error.URLError as e:
+        return Response(
+            {"error": f"No se pudo conectar al servicio RUNT VIN: {str(e.reason)}"},
+            status=status.HTTP_502_BAD_GATEWAY
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado al consultar RUNT por VIN: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
@@ -898,3 +938,65 @@ def api_falabella(request):
             {"error": f"Error inesperado al consultar placa: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+    
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+def get_nombre_cliente(request):
+
+    numero_documento = request.query_params.get('numero_documento', None)
+
+    if not numero_documento:
+        return Response(
+            {"error": "Se requiere el parámetro 'numero_documento'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Paso 1: Consultar servicio RUNT
+    url_runt = f"http://190.120.231.117:8080/api/runt/{numero_documento}"
+    runt_fallback = False
+
+    try:
+        req = urllib.request.Request(url_runt, method='GET')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode('utf-8'))
+
+        # Si la persona no está inscrita en RUNT, intentar con API judicial
+        if data.get('no_inscrito', False):
+            runt_fallback = True
+        else:
+            data['fuente'] = 'runt'
+            return Response(data, status=status.HTTP_200_OK)
+
+    except (urllib.error.HTTPError, urllib.error.URLError):
+        runt_fallback = True
+    except Exception:
+        runt_fallback = True
+
+    # Paso 2: Fallback a API judicial si RUNT no tiene datos
+    if runt_fallback:
+        url_judicial = f"http://190.120.231.117:8080/api/judicial/cc/{numero_documento}"
+        try:
+            req = urllib.request.Request(url_judicial, method='GET')
+            req.add_header('Accept', 'application/json')
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = json.loads(response.read().decode('utf-8'))
+            data['fuente'] = 'judicial'
+            return Response(data, status=status.HTTP_200_OK)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')
+            return Response(
+                {"error": f"Error del servicio judicial: {e.code}", "detalle": body},
+                status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+            )
+        except urllib.error.URLError as e:
+            return Response(
+                {"error": f"No se pudo conectar al servicio de consulta: {str(e.reason)}"},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Error inesperado al consultar: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
