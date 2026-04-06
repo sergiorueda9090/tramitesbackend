@@ -19,6 +19,7 @@ idna==3.11
 Incremental==24.11.0
 msgpack==1.1.2
 mysqlclient==2.2.7
+openpyxl==3.1.5
 packaging==26.0
 py-ubjson==0.16.1
 pyasn1==0.6.2
