@@ -282,6 +282,34 @@ def tarifario_history(request, pk):
         )
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_tarifario_by_codigo(request, codigo_tarifa):
+    """Buscar tarifario SOAT por codigo_tarifa"""
+    try:
+        tarifario = TarifarioSoat.objects.select_related('user').filter(
+            codigo_tarifa=codigo_tarifa,
+            deleted_at__isnull=True
+        ).first()
+
+        if not tarifario:
+            return Response(
+                {"error": "Tarifa no encontrada"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response({
+            'status': 'success',
+            'data': serialize_tarifario(tarifario)
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al buscar tarifa: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('tarifario_soat', 'create')])
 def bulk_create_tarifario(request):
