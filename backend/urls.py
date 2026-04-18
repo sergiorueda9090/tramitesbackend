@@ -31,6 +31,7 @@ urlpatterns = [
     path('api/etiquetas/',     include('etiquetas.api.urls'),   name="etiquetas"),
     path('api/proveedores/',   include('proveedores.api.urls'),    name="proveedores"),
     path('api/cotizador/',     include('cotizador.api.urls'),   name="cotizador"),
+    path('api/casos_especiales/', include('casos_especiales.api.urls'), name="casos_especiales"),
     path('api/tarjetas/',      include('tarjetas.api.urls'),    name="tarjetas"),
     path('api/recepcion_pago/', include('recepcion_pago.api.urls'), name="recepcion_pago"),
     path('api/devoluciones/',  include('devoluciones.api.urls'), name="devoluciones"),
@@ -42,4 +43,5 @@ urlpatterns = [
     path('api/tarifarios_soat/',     include('tarifario_soat.api.urls'),     name="tarifarios_soat"),
     path('api/base_de_datos/',       include('base_de_datos.api.urls'),     name="base_de_datos"),
     path('api/api_app/',             include('api_app.api.urls'),           name="api_app"),
+    path('api/tramites/',            include('tramites.api.urls'),          name="tramites"),
 ]

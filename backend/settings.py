@@ -60,6 +60,8 @@ INSTALLED_APPS = [
     'tarifario_soat',
     'base_de_datos',
     'api_app',
+    'casos_especiales',
+    'tramites',
 ]
 
 MIDDLEWARE = [
