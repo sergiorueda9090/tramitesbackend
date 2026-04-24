@@ -34,6 +34,7 @@ def serialize_cliente(cliente, include_precios=True, include_precios_info=False,
         'color': cliente.color,
         'nombre': cliente.nombre,
         'telefono': cliente.telefono,
+        'email': cliente.email,
         'direccion': cliente.direccion,
         'usuario': cliente.usuario_id,
         'usuario_name': f"{cliente.usuario.first_name} {cliente.usuario.last_name}".strip() if cliente.usuario else None,
@@ -79,6 +80,7 @@ def create_client(request):
 
         color = request.data.get('color', '#1976d2')
         telefono = request.data.get('telefono', '')
+        email = request.data.get('email', '') or None
         direccion = request.data.get('direccion', '')
         tipo_cliente = request.data.get('tipo_cliente', TipoCliente.PARTICULAR)
         medio_comunicacion = request.data.get('medio_comunicacion', MedioComunicacion.EMAIL)
@@ -117,6 +119,7 @@ def create_client(request):
             color=color,
             nombre=nombre,
             telefono=telefono,
+            email=email,
             direccion=direccion,
             tipo_cliente=tipo_cliente,
             usuario=request.user,
@@ -169,6 +172,7 @@ def list_clients(request):
             clientes = clientes.filter(
                 Q(nombre__icontains=search_query) |
                 Q(telefono__icontains=search_query) |
+                Q(email__icontains=search_query) |
                 Q(direccion__icontains=search_query)
             )
 
@@ -264,6 +268,8 @@ def update_client(request, pk):
 
         cliente.nombre    = request.data.get('nombre', cliente.nombre)
         cliente.telefono  = request.data.get('telefono', cliente.telefono)
+        if 'email' in request.data:
+            cliente.email = request.data.get('email') or None
         cliente.direccion = request.data.get('direccion', cliente.direccion)
         cliente.color     = request.data.get('color', cliente.color)
 
@@ -433,6 +439,7 @@ def client_history(request, pk):
                 } if h.history_user else None,
                 'nombre': h.nombre,
                 'telefono': h.telefono,
+                'email': h.email,
                 'direccion': h.direccion,
                 'color': h.color,
                 'tipo_cliente': h.tipo_cliente,

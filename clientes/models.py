@@ -19,6 +19,7 @@ class Cliente(models.Model):
     color = models.CharField(max_length=7, default='#1976d2', help_text='Color hexadecimal')
     nombre = models.CharField(max_length=255)
     telefono = models.CharField(max_length=20, blank=True, null=True)
+    email = models.EmailField(max_length=255, blank=True, null=True)
     direccion = models.TextField(blank=True, null=True)
     usuario = models.ForeignKey(
         settings.AUTH_USER_MODEL,
