@@ -148,6 +148,32 @@ def create_pasarela(request):
             direccion=request.data.get('direccion', '') or '',
         )
 
+        # Notificar en tiempo real:
+        # 1) Lista de tramites: este tramite sale (fue enviado a pasarela).
+        # 2) Lista de pasarela: aparece un nuevo registro.
+        # Best effort: cualquier fallo aqui no debe romper la creacion.
+        try:
+            from users.realtime import notify_view_sync
+            if pasarela.tramite_origen_id:
+                notify_view_sync(
+                    view_id='tramites_list',
+                    event_type='tramite_removed_event',
+                    payload={
+                        'tramite_id': pasarela.tramite_origen_id,
+                        'reason': 'sent_to_pasarela',
+                    },
+                )
+            notify_view_sync(
+                view_id='pasarela_de_pago_list',
+                event_type='pasarela_added_event',
+                payload={
+                    'pasarela_id': pasarela.id,
+                    'reason': 'created',
+                },
+            )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
+
         return Response(serialize_pasarela(pasarela), status=status.HTTP_201_CREATED)
 
     except DatabaseError as e:
@@ -371,10 +397,31 @@ def update_pasarela(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('pasarela_de_pago', 'delete')])
 def delete_pasarela(request, pk):
-    """Eliminar un registro de pasarela (soft delete)"""
+    """Eliminar un registro de pasarela (soft delete) = "devolver a tramites"."""
     try:
         pasarela = get_object_or_404(PasarelaPago.objects, pk=pk)
+        tramite_origen_id = pasarela.tramite_origen_id
         pasarela.soft_delete()
+
+        # Notificar en tiempo real:
+        # 1) Lista de pasarela: este registro sale.
+        # 2) Lista de tramites: el tramite origen vuelve a aparecer.
+        try:
+            from users.realtime import notify_view_sync
+            notify_view_sync(
+                view_id='pasarela_de_pago_list',
+                event_type='pasarela_removed_event',
+                payload={'pasarela_id': pasarela.id, 'reason': 'soft_deleted'},
+            )
+            if tramite_origen_id:
+                notify_view_sync(
+                    view_id='tramites_list',
+                    event_type='tramite_restored_event',
+                    payload={'tramite_id': tramite_origen_id, 'reason': 'pasarela_returned'},
+                )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
+
         return Response(
             {"message": "Registro de pasarela eliminado correctamente"},
             status=status.HTTP_200_OK
@@ -398,6 +445,24 @@ def restore_pasarela(request, pk):
                 status=status.HTTP_400_BAD_REQUEST
             )
         pasarela.restore()
+
+        # Notificar: la pasarela vuelve a aparecer y el tramite sale del listado.
+        try:
+            from users.realtime import notify_view_sync
+            notify_view_sync(
+                view_id='pasarela_de_pago_list',
+                event_type='pasarela_added_event',
+                payload={'pasarela_id': pasarela.id, 'reason': 'restored'},
+            )
+            if pasarela.tramite_origen_id:
+                notify_view_sync(
+                    view_id='tramites_list',
+                    event_type='tramite_removed_event',
+                    payload={'tramite_id': pasarela.tramite_origen_id, 'reason': 'pasarela_restored'},
+                )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
+
         return Response(serialize_pasarela(pasarela), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -412,7 +477,20 @@ def hard_delete_pasarela(request, pk):
     """Eliminar permanentemente un registro de pasarela"""
     try:
         pasarela = get_object_or_404(PasarelaPago.objects, pk=pk)
+        pasarela_id = pasarela.id
         pasarela.delete()
+
+        # Notificar: la pasarela sale del listado.
+        try:
+            from users.realtime import notify_view_sync
+            notify_view_sync(
+                view_id='pasarela_de_pago_list',
+                event_type='pasarela_removed_event',
+                payload={'pasarela_id': pasarela_id, 'reason': 'hard_deleted'},
+            )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
+
         return Response(
             {"message": "Registro de pasarela eliminado permanentemente"},
             status=status.HTTP_204_NO_CONTENT

@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.db import DatabaseError
-from django.db.models import Q
+from django.db.models import Q, Exists, OuterRef
 from datetime import datetime
 
 from ..models import Tramite
@@ -171,7 +171,14 @@ def list_tramites(request):
 
         # Excluir trámites que ya fueron enviados a pasarela (con una pasarela activa,
         # no soft-deleted). Si se soft-borra la pasarela, el trámite reaparece.
-        tramites = tramites.exclude(pasarela_pagos__deleted_at__isnull=True)
+        # Se usa Exists para evitar el LEFT JOIN que provoca falsos positivos
+        # cuando el trámite no tiene ninguna pasarela asociada.
+        from pasarela_de_pago.models import PasarelaPago
+        active_pasarela = PasarelaPago.objects.filter(
+            tramite_origen=OuterRef('pk'),
+            deleted_at__isnull=True,
+        )
+        tramites = tramites.annotate(_has_active_pasarela=Exists(active_pasarela)).filter(_has_active_pasarela=False)
 
         # Filtro de búsqueda
         search_query = request.query_params.get('search', None)

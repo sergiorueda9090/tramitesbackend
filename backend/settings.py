@@ -28,7 +28,14 @@ SECRET_KEY = 'django-insecure-mmgw$p95&0-dl399&fu2yio8vf(3n3q$pg8*(u@s4)4!+sv9nk
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS controla tanto las peticiones HTTP de Django como el origen de WebSockets
+# (a traves de AllowedHostsOriginValidator). En desarrollo aceptamos todo si DEBUG=True.
+# En produccion, configurar la lista via la variable de entorno ALLOWED_HOSTS (separada por comas).
+_allowed_hosts_env = os.getenv('ALLOWED_HOSTS', '').strip()
+if _allowed_hosts_env:
+    ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()]
+else:
+    ALLOWED_HOSTS = ['*'] if DEBUG else []
 
 
 # Application definition
@@ -111,6 +118,19 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),  # Agregar esta línea
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',  # Agregar esta línea
 }
+
+# Presence / WebSocket flags
+# Si True, las conexiones WS sin JWT valido son rechazadas con codigo 4001.
+# Si False, se acepta cualquier conexion (comportamiento legacy).
+PRESENCE_REQUIRE_AUTH = os.getenv('PRESENCE_REQUIRE_AUTH', 'true').lower() == 'true'
+
+# Si True, la presencia se guarda en Redis (multi-worker safe + multi-pestania).
+# Si False, se usa el dict en memoria del proceso (comportamiento legacy).
+PRESENCE_USE_REDIS = os.getenv('PRESENCE_USE_REDIS', 'true').lower() == 'true'
+
+# TTL en segundos para los registros de presencia. El cliente lo refresca via 'ping'.
+# Si un cliente muere sin desconectar limpiamente, su entrada expira tras este tiempo.
+PRESENCE_TTL_SECONDS = int(os.getenv('PRESENCE_TTL_SECONDS', '60'))
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
