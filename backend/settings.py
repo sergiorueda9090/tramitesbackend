@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'api_app',
     'casos_especiales',
     'tramites',
+    'pasarela_de_pago',
 ]
 
 MIDDLEWARE = [

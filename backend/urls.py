@@ -44,4 +44,5 @@ urlpatterns = [
     path('api/base_de_datos/',       include('base_de_datos.api.urls'),     name="base_de_datos"),
     path('api/api_app/',             include('api_app.api.urls'),           name="api_app"),
     path('api/tramites/',            include('tramites.api.urls'),          name="tramites"),
+    path('api/pasarela_de_pago/',    include('pasarela_de_pago.api.urls'),  name="pasarela_de_pago"),
 ]
