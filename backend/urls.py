@@ -14,6 +14,8 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, include
 
@@ -45,4 +47,11 @@ urlpatterns = [
     path('api/api_app/',             include('api_app.api.urls'),           name="api_app"),
     path('api/tramites/',            include('tramites.api.urls'),          name="tramites"),
     path('api/pasarela_de_pago/',    include('pasarela_de_pago.api.urls'),  name="pasarela_de_pago"),
+    path('api/finalizados_tramites/', include('finalizados_tramites.api.urls'), name="finalizados_tramites"),
+    path('api/gastos_categoria/',     include('gastos_categoria.api.urls'),     name="gastos_categoria"),
 ]
+
+# En dev, servir archivos de MEDIA_ROOT vía Django.
+# Producción: configurar nginx/cloudfront/S3 para servir /media/.
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

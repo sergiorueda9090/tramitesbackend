@@ -9,7 +9,8 @@ from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from django.db import DatabaseError
 from django.db.models import Q, Count, Prefetch
-from datetime import datetime
+from django.utils import timezone
+from datetime import datetime, timedelta
 
 from clientes.models import Cliente, MedioComunicacion, TipoCliente, PrecioCliente
 from .permissions import RolePermission, ModulePermission
@@ -241,6 +242,55 @@ def list_clients(request):
     except Exception as e:
         return Response(
             {"error": f"Error al obtener clientes: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'auxiliar', 'vendedor']), ModulePermission('clientes', 'view')])
+def top_clients(request):
+    """Top N clientes mas consultados (frecuencia segun RegistroVehiculo del cotizador)."""
+    try:
+        try:
+            limit = int(request.query_params.get('limit', 10))
+        except (ValueError, TypeError):
+            limit = 10
+        limit = max(1, min(limit, 50))
+
+        try:
+            days = int(request.query_params.get('days', 90))
+        except (ValueError, TypeError):
+            days = 90
+
+        registros_filter = Q(registros_vehiculo__deleted_at__isnull=True)
+        if days > 0:
+            cutoff = timezone.now() - timedelta(days=days)
+            registros_filter &= Q(registros_vehiculo__created_at__gte=cutoff)
+
+        clientes = (
+            Cliente.objects
+            .filter(deleted_at__isnull=True)
+            .annotate(consultas=Count('registros_vehiculo', filter=registros_filter))
+            .filter(consultas__gt=0)
+            .order_by('-consultas', '-updated_at')[:limit]
+        )
+
+        data = [{
+            'id': c.id,
+            'color': c.color,
+            'nombre': c.nombre,
+            'telefono': c.telefono,
+            'email': c.email,
+            'tipo_cliente': c.tipo_cliente,
+            'tipo_cliente_display': c.get_tipo_cliente_display(),
+            'consultas': c.consultas,
+        } for c in clientes]
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al obtener clientes top: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

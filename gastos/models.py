@@ -51,10 +51,10 @@ class GastoRelacion(models.Model):
     )
 
     gasto = models.ForeignKey(
-        Gasto,
+        'gastos_categoria.GastoCategoria',
         on_delete=models.CASCADE,
         related_name='gasto_relaciones',
-        help_text='Gasto asociado'
+        help_text='Categoría asociada al gasto'
     )
 
     tarjeta = models.ForeignKey(

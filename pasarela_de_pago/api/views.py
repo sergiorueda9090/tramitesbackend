@@ -159,6 +159,70 @@ def create_pasarela(request):
             observacion=request.data.get('observacion', '') or '',
         )
 
+        # Snapshot a finalizados_tramites cuando viene de un trámite.
+        # Best-effort: si falla no rompe la creación de la pasarela.
+        if pasarela.tramite_origen_id:
+            try:
+                from finalizados_tramites.models import TramiteFinalizado
+                from django.utils import timezone as _tz
+                from decimal import Decimal
+
+                # Snapshot del 4x1000 al momento del cierre.
+                # Aplica solo cuando la tarjeta tiene cuatro_por_mil='1'.
+                aplica_4x1000 = bool(pasarela.tarjeta and pasarela.tarjeta.cuatro_por_mil == '1')
+                base = (pasarela.precio_lay or Decimal('0')) + (pasarela.comision or Decimal('0'))
+                cuatro_por_mil_valor = (base * Decimal('4') / Decimal('1000')) if aplica_4x1000 else Decimal('0')
+
+                TramiteFinalizado.objects.create(
+                    pasarela=pasarela,
+                    tramite_origen_id_snapshot=pasarela.tramite_origen_id,
+                    usuario=pasarela.tramite_origen.usuario if pasarela.tramite_origen else request.user,
+                    usuario_que_confirma=request.user,
+                    cliente=pasarela.cliente,
+                    etiqueta=pasarela.etiqueta,
+                    precio_cliente=pasarela.precio_cliente,
+                    tarifario_soat=pasarela.tarifario_soat,
+                    tarjeta=pasarela.tarjeta,
+                    tipo_tramite=pasarela.tipo_tramite,
+                    tipo_vehiculo=pasarela.tipo_vehiculo,
+                    grupo_soat=pasarela.grupo_soat,
+                    grupo_clase_runt=pasarela.grupo_clase_runt,
+                    grupo_subcriterio=pasarela.grupo_subcriterio,
+                    modulo_pregunta1=pasarela.modulo_pregunta1,
+                    modulo_pregunta2=pasarela.modulo_pregunta2,
+                    tarifa_codigo=pasarela.tarifa_codigo,
+                    tarifa_manual=pasarela.tarifa_manual,
+                    precio_lay=pasarela.precio_lay,
+                    comision=pasarela.comision,
+                    placa=pasarela.placa,
+                    clase=pasarela.clase,
+                    tipo_servicio=pasarela.tipo_servicio,
+                    marca=pasarela.marca,
+                    linea=pasarela.linea,
+                    modelo=pasarela.modelo,
+                    color=pasarela.color,
+                    cilindraje=pasarela.cilindraje,
+                    pasajeros_sentados=pasarela.pasajeros_sentados,
+                    capacidad_carga=pasarela.capacidad_carga,
+                    peso_bruto=pasarela.peso_bruto,
+                    chasis=pasarela.chasis,
+                    vin=pasarela.vin,
+                    tipo_documento=pasarela.tipo_documento,
+                    numero_documento=pasarela.numero_documento,
+                    nombre_completo=pasarela.nombre_completo,
+                    telefono=pasarela.telefono,
+                    correo=pasarela.correo,
+                    direccion=pasarela.direccion,
+                    tramite_estado=pasarela.tramite_estado,
+                    confirmacion_estado=pasarela.confirmacion_estado,
+                    cargar_pdf_estado=pasarela.cargar_pdf_estado,
+                    observacion=pasarela.observacion,
+                    pago_confirmado_at=_tz.now(),
+                    cuatro_por_mil_valor=cuatro_por_mil_valor,
+                )
+            except Exception as e:
+                print(f"WARNING: TramiteFinalizado.create fallo: {e}")
+
         # Notificar en tiempo real:
         # 1) Lista de tramites: este tramite sale (fue enviado a pasarela).
         # 2) Lista de pasarela: aparece un nuevo registro.

@@ -70,6 +70,8 @@ INSTALLED_APPS = [
     'casos_especiales',
     'tramites',
     'pasarela_de_pago',
+    'finalizados_tramites',
+    'gastos_categoria'
 ]
 
 MIDDLEWARE = [
@@ -185,6 +187,15 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Media files (uploads de usuario)
+# En produccion el servidor web (nginx) debe servir MEDIA_ROOT directamente.
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Limites de upload (15 MB por archivo, 80 MB por request)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 80 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

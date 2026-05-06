@@ -10,6 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from ..models import Gasto, GastoRelacion
+from gastos_categoria.models import GastoCategoria
 from tarjetas.models import Tarjeta
 from .permissions import RolePermission, ModulePermission
 
@@ -338,18 +339,18 @@ def create_gasto_relacion(request):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Validar que el gasto exista
+        # Validar que la categoría exista
         gasto_id = request.data.get('gasto')
         try:
-            gasto = Gasto.objects.get(pk=gasto_id)
+            gasto = GastoCategoria.objects.get(pk=gasto_id)
             if gasto.deleted_at is not None:
                 return Response(
-                    {"error": "El gasto especificado está eliminado."},
+                    {"error": "La categoría especificada está eliminada."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-        except Gasto.DoesNotExist:
+        except GastoCategoria.DoesNotExist:
             return Response(
-                {"error": "El gasto especificado no existe."},
+                {"error": "La categoría especificada no existe."},
                 status=status.HTTP_404_NOT_FOUND
             )
 
@@ -533,20 +534,20 @@ def update_gasto_relacion(request, pk):
     try:
         relacion = get_object_or_404(GastoRelacion.objects.select_related('tarjeta'), pk=pk)
 
-        # Validar que el gasto exista si se proporciona
+        # Validar que la categoría exista si se proporciona
         if 'gasto' in request.data:
             gasto_id = request.data.get('gasto')
             try:
-                gasto = Gasto.objects.get(pk=gasto_id)
+                gasto = GastoCategoria.objects.get(pk=gasto_id)
                 if gasto.deleted_at is not None:
                     return Response(
-                        {"error": "El gasto especificado está eliminado."},
+                        {"error": "La categoría especificada está eliminada."},
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 relacion.gasto = gasto
-            except Gasto.DoesNotExist:
+            except GastoCategoria.DoesNotExist:
                 return Response(
-                    {"error": "El gasto especificado no existe."},
+                    {"error": "La categoría especificada no existe."},
                     status=status.HTTP_404_NOT_FOUND
                 )
 
