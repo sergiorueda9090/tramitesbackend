@@ -39,6 +39,12 @@ def serialize_pasarela(pasarela):
             'descripcion': pasarela.tarifario_soat.descripcion,
             'valor': str(pasarela.tarifario_soat.valor),
         } if pasarela.tarifario_soat else None,
+        'tarjeta': {
+            'id': pasarela.tarjeta.id,
+            'numero': pasarela.tarjeta.numero,
+            'titular': pasarela.tarjeta.titular,
+            'cuatro_por_mil': pasarela.tarjeta.cuatro_por_mil,
+        } if pasarela.tarjeta else None,
 
         'tipo_tramite': pasarela.tipo_tramite,
         'tipo_tramite_display': pasarela.get_tipo_tramite_display(),
@@ -83,6 +89,8 @@ def serialize_pasarela(pasarela):
         'confirmacion_estado': pasarela.confirmacion_estado,
         'cargar_pdf_estado': pasarela.cargar_pdf_estado,
 
+        'observacion': pasarela.observacion,
+
         'created_at': pasarela.created_at,
         'updated_at': pasarela.updated_at,
         'deleted_at': pasarela.deleted_at,
@@ -111,6 +119,7 @@ def create_pasarela(request):
             etiqueta_id=request.data.get('etiqueta') or None,
             precio_cliente_id=request.data.get('precio_cliente') or None,
             tarifario_soat_id=request.data.get('tarifario_soat') or None,
+            tarjeta_id=request.data.get('tarjeta') or None,
 
             tipo_tramite=request.data.get('tipo_tramite', 'SOAT') or 'SOAT',
             tipo_vehiculo=request.data.get('tipo_vehiculo', '') or '',
@@ -146,6 +155,8 @@ def create_pasarela(request):
             telefono=request.data.get('telefono', '') or '',
             correo=request.data.get('correo', '') or '',
             direccion=request.data.get('direccion', '') or '',
+
+            observacion=request.data.get('observacion', '') or '',
         )
 
         # Notificar en tiempo real:
@@ -331,6 +342,8 @@ def update_pasarela(request, pk):
             pasarela.precio_cliente_id = request.data.get('precio_cliente')
         if 'tarifario_soat' in request.data:
             pasarela.tarifario_soat_id = request.data.get('tarifario_soat')
+        if 'tarjeta' in request.data:
+            pasarela.tarjeta_id = request.data.get('tarjeta') or None
 
         # Tipo
         pasarela.tipo_tramite = request.data.get('tipo_tramite', pasarela.tipo_tramite)
@@ -377,6 +390,9 @@ def update_pasarela(request, pk):
         pasarela.tramite_estado = request.data.get('tramite_estado', pasarela.tramite_estado)
         pasarela.confirmacion_estado = request.data.get('confirmacion_estado', pasarela.confirmacion_estado)
         pasarela.cargar_pdf_estado = request.data.get('cargar_pdf_estado', pasarela.cargar_pdf_estado)
+
+        # Observación opcional
+        pasarela.observacion = request.data.get('observacion', pasarela.observacion)
 
         pasarela.save()
 
@@ -538,6 +554,8 @@ def pasarela_history(request, pk):
                 'tramite_estado': h.tramite_estado,
                 'confirmacion_estado': h.confirmacion_estado,
                 'cargar_pdf_estado': h.cargar_pdf_estado,
+                'observacion': h.observacion,
+                'tarjeta_id': h.tarjeta_id,
             })
 
         return paginator.get_paginated_response(data)

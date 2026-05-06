@@ -5,6 +5,7 @@ from simple_history.models import HistoricalRecords
 from clientes.models import Cliente, PrecioCliente
 from etiquetas.models import Etiqueta
 from tarifario_soat.models import TarifarioSoat
+from tarjetas.models import Tarjeta
 
 
 # Choices duplicadas a propósito para mantener independencia del app de tramites.
@@ -62,6 +63,7 @@ class PasarelaPago(models.Model):
     etiqueta       = models.ForeignKey(Etiqueta, on_delete=models.SET_NULL, null=True, blank=True, related_name='pasarela_pagos')
     precio_cliente = models.ForeignKey(PrecioCliente, on_delete=models.SET_NULL, null=True, blank=True, related_name='pasarela_pagos')
     tarifario_soat = models.ForeignKey(TarifarioSoat, on_delete=models.SET_NULL, null=True, blank=True, related_name='pasarela_pagos', help_text='Tarifa SOAT resuelta')
+    tarjeta        = models.ForeignKey(Tarjeta, on_delete=models.SET_NULL, null=True, blank=True, related_name='pasarela_pagos', help_text='Tarjeta utilizada para el pago (seleccionada en el modal de timer)')
 
     # Tipo de trámite (snapshot)
     tipo_tramite  = models.CharField(max_length=20, choices=TIPO_TRAMITE_CHOICES, default='SOAT')
@@ -107,6 +109,9 @@ class PasarelaPago(models.Model):
     tramite_estado      = models.CharField(max_length=1, choices=ESTADO_CHOICES, default='1')
     confirmacion_estado = models.CharField(max_length=1, choices=ESTADO_CHOICES, default='0')
     cargar_pdf_estado   = models.CharField(max_length=1, choices=ESTADO_CHOICES, default='0')
+
+    # Observación opcional capturada en el modal de timer (3 min) al enviar desde Trámites
+    observacion = models.TextField(blank=True, default='', help_text='Notas opcionales del usuario al confirmar el pago')
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
