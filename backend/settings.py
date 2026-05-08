@@ -71,7 +71,8 @@ INSTALLED_APPS = [
     'tramites',
     'pasarela_de_pago',
     'finalizados_tramites',
-    'gastos_categoria'
+    'gastos_categoria',
+    'cuatro_por_mil'
 ]
 
 MIDDLEWARE = [
