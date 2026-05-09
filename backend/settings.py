@@ -72,7 +72,9 @@ INSTALLED_APPS = [
     'pasarela_de_pago',
     'finalizados_tramites',
     'gastos_categoria',
-    'cuatro_por_mil'
+    'cuatro_por_mil',
+    'utilidades',
+    'computador_ips',
 ]
 
 MIDDLEWARE = [
