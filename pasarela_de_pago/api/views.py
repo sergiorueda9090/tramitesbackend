@@ -91,6 +91,10 @@ def serialize_pasarela(pasarela):
 
         'observacion': pasarela.observacion,
 
+        'pago_estado': pasarela.pago_estado,
+        'pago_estado_display': pasarela.get_pago_estado_display(),
+        'pago_confirmado_at': pasarela.pago_confirmado_at,
+
         'created_at': pasarela.created_at,
         'updated_at': pasarela.updated_at,
         'deleted_at': pasarela.deleted_at,
@@ -157,71 +161,14 @@ def create_pasarela(request):
             direccion=request.data.get('direccion', '') or '',
 
             observacion=request.data.get('observacion', '') or '',
+
+            pago_estado=request.data.get('pago_estado', 'pendiente') or 'pendiente',
         )
 
-        # Snapshot a finalizados_tramites cuando viene de un trámite.
-        # Best-effort: si falla no rompe la creación de la pasarela.
-        if pasarela.tramite_origen_id:
-            try:
-                from finalizados_tramites.models import TramiteFinalizado
-                from django.utils import timezone as _tz
-                from decimal import Decimal
-
-                # Snapshot del 4x1000 al momento del cierre.
-                # Aplica solo cuando la tarjeta tiene cuatro_por_mil='1'.
-                aplica_4x1000 = bool(pasarela.tarjeta and pasarela.tarjeta.cuatro_por_mil == '1')
-                base = (pasarela.precio_lay or Decimal('0')) + (pasarela.comision or Decimal('0'))
-                cuatro_por_mil_valor = (base * Decimal('4') / Decimal('1000')) if aplica_4x1000 else Decimal('0')
-
-                TramiteFinalizado.objects.create(
-                    pasarela=pasarela,
-                    tramite_origen_id_snapshot=pasarela.tramite_origen_id,
-                    usuario=pasarela.tramite_origen.usuario if pasarela.tramite_origen else request.user,
-                    usuario_que_confirma=request.user,
-                    cliente=pasarela.cliente,
-                    etiqueta=pasarela.etiqueta,
-                    precio_cliente=pasarela.precio_cliente,
-                    tarifario_soat=pasarela.tarifario_soat,
-                    tarjeta=pasarela.tarjeta,
-                    tipo_tramite=pasarela.tipo_tramite,
-                    tipo_vehiculo=pasarela.tipo_vehiculo,
-                    grupo_soat=pasarela.grupo_soat,
-                    grupo_clase_runt=pasarela.grupo_clase_runt,
-                    grupo_subcriterio=pasarela.grupo_subcriterio,
-                    modulo_pregunta1=pasarela.modulo_pregunta1,
-                    modulo_pregunta2=pasarela.modulo_pregunta2,
-                    tarifa_codigo=pasarela.tarifa_codigo,
-                    tarifa_manual=pasarela.tarifa_manual,
-                    precio_lay=pasarela.precio_lay,
-                    comision=pasarela.comision,
-                    placa=pasarela.placa,
-                    clase=pasarela.clase,
-                    tipo_servicio=pasarela.tipo_servicio,
-                    marca=pasarela.marca,
-                    linea=pasarela.linea,
-                    modelo=pasarela.modelo,
-                    color=pasarela.color,
-                    cilindraje=pasarela.cilindraje,
-                    pasajeros_sentados=pasarela.pasajeros_sentados,
-                    capacidad_carga=pasarela.capacidad_carga,
-                    peso_bruto=pasarela.peso_bruto,
-                    chasis=pasarela.chasis,
-                    vin=pasarela.vin,
-                    tipo_documento=pasarela.tipo_documento,
-                    numero_documento=pasarela.numero_documento,
-                    nombre_completo=pasarela.nombre_completo,
-                    telefono=pasarela.telefono,
-                    correo=pasarela.correo,
-                    direccion=pasarela.direccion,
-                    tramite_estado=pasarela.tramite_estado,
-                    confirmacion_estado=pasarela.confirmacion_estado,
-                    cargar_pdf_estado=pasarela.cargar_pdf_estado,
-                    observacion=pasarela.observacion,
-                    pago_confirmado_at=_tz.now(),
-                    cuatro_por_mil_valor=cuatro_por_mil_valor,
-                )
-            except Exception as e:
-                print(f"WARNING: TramiteFinalizado.create fallo: {e}")
+        # El snapshot a TramiteFinalizado ya NO se crea aquí. Ahora es un paso
+        # explícito: el usuario debe hacer click en "Enviar a Trámites Finalizados"
+        # desde el listado de Pasarela y confirmar "Pago exitoso" en el modal de
+        # timer. Ver finalizados_tramites/api/views.py:crear_desde_pasarela.
 
         # Notificar en tiempo real:
         # 1) Lista de tramites: este tramite sale (fue enviado a pasarela).
@@ -628,6 +575,71 @@ def pasarela_history(request, pk):
         return Response(
             {"error": f"Error al obtener historial: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ==================== CONFIRMAR PAGO (modal de timer 3 min) ====================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, ModulePermission('pasarela_de_pago', 'edit')])
+def confirmar_pago_pasarela(request, pk):
+    """Confirma el resultado del pago tras el modal de timer.
+
+    Se llama cuando el operario que originó el envío termina el flujo en el
+    `PagoTimerDialog` (botón "Pago exitoso" / "No éxito" o expiración del
+    timer). Actualiza `pago_estado`, opcionalmente `observacion` y `tarjeta`,
+    marca `pago_confirmado_at` y emite un broadcast `pasarela_updated_event`
+    para que el listado de pasarela_de_pago se refresque en tiempo real en
+    el resto de sesiones.
+    """
+    try:
+        pasarela = get_object_or_404(PasarelaPago.objects, pk=pk)
+
+        pago_estado = request.data.get('pago_estado')
+        if pago_estado not in ('exitoso', 'no_exitoso', 'pendiente'):
+            return Response(
+                {"error": "pago_estado inválido. Use 'exitoso', 'no_exitoso' o 'pendiente'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pasarela.pago_estado = pago_estado
+
+        # Observación y tarjeta son opcionales: solo se actualizan si vienen.
+        if 'observacion' in request.data:
+            pasarela.observacion = request.data.get('observacion') or ''
+        if 'tarjeta' in request.data:
+            pasarela.tarjeta_id = request.data.get('tarjeta') or None
+
+        from django.utils import timezone as _tz
+        pasarela.pago_confirmado_at = _tz.now()
+        pasarela.save()
+
+        # Broadcast a /ws/presence/: otras sesiones que vean la lista de
+        # pasarela_de_pago refrescarán el registro silenciosamente.
+        try:
+            from users.realtime import notify_view_sync
+            notify_view_sync(
+                view_id='pasarela_de_pago_list',
+                event_type='pasarela_updated_event',
+                payload={
+                    'pasarela_id': pasarela.id,
+                    'reason': f'pago_{pago_estado}',
+                },
+            )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
+
+        return Response(serialize_pasarela(pasarela), status=status.HTTP_200_OK)
+
+    except DatabaseError as e:
+        return Response(
+            {"error": f"Error de base de datos: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Error inesperado: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 

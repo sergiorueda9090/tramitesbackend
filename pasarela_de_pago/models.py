@@ -33,6 +33,16 @@ TIPO_VEHICULO_CHOICES = [
     ('CERO_KM', 'Cero Kilómetros'),
 ]
 
+# Estado del pago confirmado por el operario en el modal de timer (3 min).
+# 'pendiente' es el estado inicial al crear la pasarela desde Trámites: el registro
+# ya es visible en el listado pero el operario todavía no ha confirmado el resultado
+# del pago real en la pasarela externa.
+PAGO_ESTADO_CHOICES = [
+    ('pendiente', 'Pendiente'),
+    ('exitoso', 'Exitoso'),
+    ('no_exitoso', 'No exitoso'),
+]
+
 GRUPO_SOAT_CHOICES = [
     ('MOTOS', 'Motos'),
     ('MOTOCARROS', 'Motocarros'),
@@ -112,6 +122,11 @@ class PasarelaPago(models.Model):
 
     # Observación opcional capturada en el modal de timer (3 min) al enviar desde Trámites
     observacion = models.TextField(blank=True, default='', help_text='Notas opcionales del usuario al confirmar el pago')
+
+    # Estado del pago real (pasarela externa). 'pendiente' = el registro se creó pero
+    # el operario aún no confirmó el resultado en el modal de timer.
+    pago_estado     = models.CharField(max_length=20, choices=PAGO_ESTADO_CHOICES, default='pendiente')
+    pago_confirmado_at = models.DateTimeField(null=True, blank=True, help_text='Cuándo el operario marcó el resultado del pago')
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

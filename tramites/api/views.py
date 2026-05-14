@@ -160,6 +160,110 @@ def create_tramite(request):
         )
 
 
+_TIPO_DOC_MAP = {
+    'C': 'CC',   # Cédula de Ciudadanía
+    'E': 'CE',   # Cédula de Extranjería
+    'N': 'NIT',  # NIT
+    'P': 'PAS',  # Pasaporte
+}
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('tramites', 'create')])
+def crear_desde_base_de_datos(request):
+    """Crea un Trámite a partir de un RegistroVehiculo de BaseDeDatos.
+
+    Solo copia titular + vehículo. Los campos SOAT/financieros quedan vacíos:
+    el usuario los completa después editando el trámite en su módulo. El
+    registro de BaseDeDatos queda intacto (base maestra reutilizable).
+
+    Dispara `tramite_added_event` para que el listado de Trámites se
+    refresque en tiempo real en el resto de sesiones.
+
+    Payload:
+        registro_id: int (requerido) — id del RegistroVehiculo
+    """
+    from base_de_datos.models import RegistroVehiculo
+
+    registro_id = request.data.get('registro_id')
+    if not registro_id:
+        return Response({"error": "registro_id es requerido."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        registro = get_object_or_404(RegistroVehiculo.objects, pk=registro_id)
+        if registro.is_deleted:
+            return Response(
+                {"error": "El registro de Base de Datos fue eliminado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # tipo_documento: BaseDeDatos usa códigos 1 char ('C','E','N','P','T',...).
+        # Trámites solo soporta CC/CE/NIT/PAS. Otros tipos caen a CC por defecto.
+        tipo_documento_tramite = _TIPO_DOC_MAP.get(registro.tipo_documento, 'CC')
+
+        tramite = Tramite.objects.create(
+            usuario=request.user,
+            cliente=registro.cliente,
+            etiqueta=None,
+            precio_cliente=None,
+            tarifario_soat=None,
+
+            tipo_tramite=registro.tipo_tramite or 'SOAT',
+            tipo_vehiculo=registro.tipo_vehiculo or '',
+
+            grupo_soat='',
+            grupo_clase_runt='',
+            grupo_subcriterio='',
+            modulo_pregunta1='',
+            modulo_pregunta2='',
+            tarifa_codigo='',
+            tarifa_manual=False,
+
+            precio_lay=None,
+            comision=None,
+
+            placa=registro.placa or '',
+            clase=registro.clase or '',
+            tipo_servicio=registro.tipo_servicio or '',
+            marca=registro.marca or '',
+            linea=registro.linea or '',
+            modelo=(registro.modelo or '')[:4],
+            color=registro.color or '',
+            cilindraje=(registro.cilindraje or '')[:10],
+            pasajeros_sentados='',
+            capacidad_carga='',
+            peso_bruto='',
+            chasis=(registro.num_chasis or '')[:50],
+            vin=(registro.vin or '')[:50],
+
+            tipo_documento=tipo_documento_tramite,
+            numero_documento=registro.numero_documento or '',
+            nombre_completo=registro.nombre_completo or '',
+            telefono=registro.telefono or '',
+            correo='',
+            direccion='',
+        )
+
+        # Broadcast WS: el listado de Trámites se refresca en tiempo real
+        # en cualquier otra sesión que lo esté viendo.
+        try:
+            from users.realtime import notify_view_sync
+            notify_view_sync(
+                view_id='tramites_list',
+                event_type='tramite_added_event',
+                payload={'tramite_id': tramite.id, 'reason': 'created_from_base_de_datos'},
+            )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
+
+        return Response(serialize_tramite(tramite), status=status.HTTP_201_CREATED)
+
+    except DatabaseError as e:
+        return Response({"error": f"Error de base de datos: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except Exception as e:
+        return Response({"error": f"Error inesperado: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, ModulePermission('tramites', 'view')])
 def list_tramites(request):

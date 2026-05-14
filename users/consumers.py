@@ -385,6 +385,16 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             'reason': event.get('reason', ''),
         }))
 
+    async def tramite_added_event(self, event):
+        """Notifica que un nuevo tramite debe aparecer en el listado
+        (ej: creado desde Base de Datos o desde el Cotizador)."""
+        await self.send(text_data=json.dumps({
+            'type': 'tramite_added',
+            'view_id': 'tramites_list',
+            'tramite_id': event.get('tramite_id'),
+            'reason': event.get('reason', ''),
+        }))
+
     async def pasarela_added_event(self, event):
         """Notifica que un nuevo registro de pasarela debe aparecer."""
         await self.send(text_data=json.dumps({
@@ -400,6 +410,24 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             'type': 'pasarela_removed',
             'view_id': 'pasarela_de_pago_list',
             'pasarela_id': event.get('pasarela_id'),
+            'reason': event.get('reason', ''),
+        }))
+
+    async def pasarela_updated_event(self, event):
+        """Notifica que un registro de pasarela cambio (ej. pago_estado)."""
+        await self.send(text_data=json.dumps({
+            'type': 'pasarela_updated',
+            'view_id': 'pasarela_de_pago_list',
+            'pasarela_id': event.get('pasarela_id'),
+            'reason': event.get('reason', ''),
+        }))
+
+    async def finalizado_added_event(self, event):
+        """Notifica que un nuevo TramiteFinalizado debe aparecer en el listado."""
+        await self.send(text_data=json.dumps({
+            'type': 'finalizado_added',
+            'view_id': 'finalizados_tramites_list',
+            'finalizado_id': event.get('finalizado_id'),
             'reason': event.get('reason', ''),
         }))
 

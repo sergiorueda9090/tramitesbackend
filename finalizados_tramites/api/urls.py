@@ -2,6 +2,7 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    path('crear-desde-pasarela/',   views.crear_desde_pasarela,   name='crear_desde_pasarela'),
     path('list/',                   views.list_finalizados,       name='list_finalizados'),
     path('<int:pk>/',               views.get_finalizado,         name='get_finalizado'),
     path('<int:pk>/update/',        views.update_finalizado,      name='update_finalizado'),

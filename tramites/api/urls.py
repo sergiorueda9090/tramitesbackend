@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     # Trámites
+    path('crear-desde-base-de-datos/', views.crear_desde_base_de_datos, name='crear_desde_base_de_datos'),
     path('list/',                   views.list_tramites,      name='list_tramites'),
     path('create/',                 views.create_tramite,     name='create_tramite'),
     path('<int:pk>/',               views.get_tramite,        name='get_tramite'),

@@ -110,6 +110,130 @@ def serialize_finalizado(t):
     }
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, ModulePermission('finalizados_tramites', 'create')])
+def crear_desde_pasarela(request):
+    """Crea un TramiteFinalizado a partir de un registro de PasarelaPago.
+
+    Disparado por el icono "Enviar a Trámites Finalizados" en el listado de
+    Pasarela, solo cuando el operario marca "Pago exitoso" en el modal de
+    timer. Hace tres cosas:
+      1. Snapshot completo de la pasarela en TramiteFinalizado.
+      2. Soft-delete de la pasarela (sale del listado de Pasarela).
+      3. Broadcasts WS: finalizado_added (aparece en Finalizados) y
+         pasarela_removed (desaparece de Pasarela) en tiempo real.
+
+    Payload:
+        pasarela_id: int (requerido)
+        observacion: str (opcional, sobrescribe la de la pasarela)
+        tarjeta:     int (opcional, sobrescribe la de la pasarela)
+    """
+    from pasarela_de_pago.models import PasarelaPago
+    from tarjetas.models import Tarjeta
+    from django.utils import timezone as _tz
+    from decimal import Decimal
+
+    pasarela_id = request.data.get('pasarela_id')
+    if not pasarela_id:
+        return Response({"error": "pasarela_id es requerido."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        pasarela = get_object_or_404(PasarelaPago.objects, pk=pasarela_id)
+        if pasarela.is_deleted:
+            return Response(
+                {"error": "La pasarela ya fue eliminada o devuelta a trámites."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        observacion_override = request.data.get('observacion')
+        tarjeta_override_id  = request.data.get('tarjeta')
+        tarjeta_final = pasarela.tarjeta
+        if tarjeta_override_id:
+            try:
+                tarjeta_final = Tarjeta.objects.get(pk=tarjeta_override_id)
+            except Tarjeta.DoesNotExist:
+                pass  # caemos a la tarjeta existente
+
+        # Snapshot del 4x1000 al momento del cierre.
+        aplica_4x1000 = bool(tarjeta_final and tarjeta_final.cuatro_por_mil == '1')
+        base = (pasarela.precio_lay or Decimal('0')) + (pasarela.comision or Decimal('0'))
+        cuatro_por_mil_valor = (base * Decimal('4') / Decimal('1000')) if aplica_4x1000 else Decimal('0')
+
+        with transaction.atomic():
+            finalizado = TramiteFinalizado.objects.create(
+                pasarela=pasarela,
+                tramite_origen_id_snapshot=pasarela.tramite_origen_id,
+                usuario=pasarela.tramite_origen.usuario if pasarela.tramite_origen else pasarela.usuario,
+                usuario_que_confirma=request.user,
+                cliente=pasarela.cliente,
+                etiqueta=pasarela.etiqueta,
+                precio_cliente=pasarela.precio_cliente,
+                tarifario_soat=pasarela.tarifario_soat,
+                tarjeta=tarjeta_final,
+                tipo_tramite=pasarela.tipo_tramite,
+                tipo_vehiculo=pasarela.tipo_vehiculo,
+                grupo_soat=pasarela.grupo_soat,
+                grupo_clase_runt=pasarela.grupo_clase_runt,
+                grupo_subcriterio=pasarela.grupo_subcriterio,
+                modulo_pregunta1=pasarela.modulo_pregunta1,
+                modulo_pregunta2=pasarela.modulo_pregunta2,
+                tarifa_codigo=pasarela.tarifa_codigo,
+                tarifa_manual=pasarela.tarifa_manual,
+                precio_lay=pasarela.precio_lay,
+                comision=pasarela.comision,
+                placa=pasarela.placa,
+                clase=pasarela.clase,
+                tipo_servicio=pasarela.tipo_servicio,
+                marca=pasarela.marca,
+                linea=pasarela.linea,
+                modelo=pasarela.modelo,
+                color=pasarela.color,
+                cilindraje=pasarela.cilindraje,
+                pasajeros_sentados=pasarela.pasajeros_sentados,
+                capacidad_carga=pasarela.capacidad_carga,
+                peso_bruto=pasarela.peso_bruto,
+                chasis=pasarela.chasis,
+                vin=pasarela.vin,
+                tipo_documento=pasarela.tipo_documento,
+                numero_documento=pasarela.numero_documento,
+                nombre_completo=pasarela.nombre_completo,
+                telefono=pasarela.telefono,
+                correo=pasarela.correo,
+                direccion=pasarela.direccion,
+                tramite_estado=pasarela.tramite_estado,
+                confirmacion_estado=pasarela.confirmacion_estado,
+                cargar_pdf_estado=pasarela.cargar_pdf_estado,
+                observacion=observacion_override if observacion_override is not None else pasarela.observacion,
+                pago_confirmado_at=_tz.now(),
+                cuatro_por_mil_valor=cuatro_por_mil_valor,
+            )
+
+            pasarela.soft_delete()
+
+        # Broadcasts: best-effort, no rompen el flujo si fallan.
+        try:
+            from users.realtime import notify_view_sync
+            notify_view_sync(
+                view_id='finalizados_tramites_list',
+                event_type='finalizado_added_event',
+                payload={'finalizado_id': finalizado.id, 'reason': 'created_from_pasarela'},
+            )
+            notify_view_sync(
+                view_id='pasarela_de_pago_list',
+                event_type='pasarela_removed_event',
+                payload={'pasarela_id': pasarela.id, 'reason': 'sent_to_finalizados'},
+            )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
+
+        return Response(serialize_finalizado(finalizado), status=status.HTTP_201_CREATED)
+
+    except DatabaseError as e:
+        return Response({"error": f"Error de base de datos: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except Exception as e:
+        return Response({"error": f"Error inesperado: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, ModulePermission('finalizados_tramites', 'view')])
 def list_finalizados(request):
