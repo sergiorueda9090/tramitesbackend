@@ -55,6 +55,9 @@ def serialize_registro(registro):
         'cilindraje': registro.cilindraje,
         'color': registro.color,
         'organismo_transito': registro.organismo_transito,
+        # Cotización
+        'precio_lay': str(registro.precio_lay) if registro.precio_lay is not None else None,
+        'comision': str(registro.comision) if registro.comision is not None else None,
         # Timestamps
         'created_at': registro.created_at,
         'updated_at': registro.updated_at,
@@ -117,6 +120,8 @@ def create_registro(request):
             cilindraje=request.data.get('cilindraje', ''),
             color=request.data.get('color', ''),
             organismo_transito=request.data.get('organismo_transito', ''),
+            precio_lay=request.data.get('precio_lay') or None,
+            comision=request.data.get('comision') or None,
         )
 
         return Response(serialize_registro(registro), status=status.HTTP_201_CREATED)
@@ -287,6 +292,7 @@ def update_registro(request, pk):
             'placa', 'clase', 'clasificacion', 'tipo_servicio', 'tipo_carroceria',
             'vin', 'num_motor', 'num_chasis', 'marca', 'linea', 'modelo',
             'cilindraje', 'color', 'organismo_transito',
+            'precio_lay', 'comision',
         ]
 
         for campo in campos:
@@ -460,7 +466,7 @@ def export_registros_excel(request):
         date_format = 'DD/MM/YYYY HH:MM'
 
         # Título del reporte
-        ws.merge_cells('A1:R1')
+        ws.merge_cells('A1:T1')
         title_cell = ws['A1']
         title_cell.value = 'Reporte de Base de Datos - Registros de Vehículos'
         title_cell.font = Font(name='Calibri', bold=True, size=14, color='1976D2')
@@ -487,7 +493,7 @@ def export_registros_excel(request):
         if filtros_texto:
             subtitulo += f'  |  Filtros: {", ".join(filtros_texto)}'
 
-        ws.merge_cells('A2:R2')
+        ws.merge_cells('A2:T2')
         subtitle_cell = ws['A2']
         subtitle_cell.value = subtitulo
         subtitle_cell.font = Font(name='Calibri', size=10, color='666666', italic=True)
@@ -514,6 +520,8 @@ def export_registros_excel(request):
             ('Clase', 14),
             ('Tipo Servicio', 14),
             ('Color', 12),
+            ('Precio de Ley', 14),
+            ('Comisión', 14),
             ('Cliente', 22),
             ('Registrado por', 20),
             ('Fecha Registro', 18),
@@ -566,6 +574,8 @@ def export_registros_excel(request):
                 registro.clase or '',
                 registro.tipo_servicio or '',
                 registro.color or '',
+                float(registro.precio_lay) if registro.precio_lay is not None else None,
+                float(registro.comision) if registro.comision is not None else None,
                 cliente_nombre,
                 usuario_name,
                 fecha_creacion,

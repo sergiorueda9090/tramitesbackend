@@ -29,6 +29,20 @@ TIPO_VEHICULO_CHOICES = [
     ('CERO_KM', 'Cero Kilómetros'),
 ]
 
+ENTIDAD_CHOICES = [
+    ('MUNDIAL', 'Mundial'),
+    ('PREVISORA', 'Previsora'),
+    ('SOLIDARIA', 'Solidaria'),
+    ('MANUAL', 'Manual'),
+]
+
+# Opciones disponibles según tipo de vehículo (la primera es el default).
+# El frontend usa el mismo mapeo para construir el Select dependiente.
+ENTIDAD_POR_TIPO_VEHICULO = {
+    'USADO':   ['MUNDIAL', 'PREVISORA', 'MANUAL'],
+    'CERO_KM': ['PREVISORA', 'SOLIDARIA', 'MANUAL'],
+}
+
 GRUPO_SOAT_CHOICES = [
     ('MOTOS', 'Motos'),
     ('MOTOCARROS', 'Motocarros'),
@@ -53,6 +67,7 @@ class Tramite(models.Model):
     # Tipo de trámite
     tipo_tramite  = models.CharField(max_length=20, choices=TIPO_TRAMITE_CHOICES, default='SOAT')
     tipo_vehiculo = models.CharField(max_length=10, choices=TIPO_VEHICULO_CHOICES, blank=True, default='')
+    entidad       = models.CharField(max_length=20, choices=ENTIDAD_CHOICES, blank=True, default='')
 
     # Resolución del árbol Grupo SOAT → Módulo → Tarifa (snapshot del Step 7 del Cotizador)
     grupo_soat          = models.CharField(max_length=20, choices=GRUPO_SOAT_CHOICES, blank=True, default='')

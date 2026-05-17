@@ -66,6 +66,12 @@ class RegistroVehiculo(models.Model):
     color = models.CharField(max_length=50, null=True, blank=True)
     organismo_transito = models.CharField(max_length=255, null=True, blank=True)
 
+    # Cotización (solo se completan si el flujo del Cotizador resolvió la
+    # tarifa sin anomalías — ver guardarRegistroDesdeCotizadorThunk y la
+    # actualización desde Step7).
+    precio_lay = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    comision   = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
     # Timestamps y soft delete
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

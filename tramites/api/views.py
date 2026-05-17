@@ -8,8 +8,15 @@ from django.db import DatabaseError
 from django.db.models import Q, Exists, OuterRef
 from datetime import datetime
 
-from ..models import Tramite
+from ..models import Tramite, ENTIDAD_POR_TIPO_VEHICULO
 from .permissions import RolePermission, ModulePermission
+
+
+def entidad_por_defecto(tipo_vehiculo):
+    """Devuelve la entidad por defecto para un tipo de vehículo (primera opción
+    del catálogo). Si tipo_vehiculo no está mapeado, devuelve ''."""
+    opciones = ENTIDAD_POR_TIPO_VEHICULO.get(tipo_vehiculo or '', [])
+    return opciones[0] if opciones else ''
 
 
 def serialize_tramite(tramite):
@@ -43,6 +50,8 @@ def serialize_tramite(tramite):
         'tipo_tramite_display': tramite.get_tipo_tramite_display(),
         'tipo_vehiculo': tramite.tipo_vehiculo,
         'tipo_vehiculo_display': tramite.get_tipo_vehiculo_display() if tramite.tipo_vehiculo else '',
+        'entidad': tramite.entidad,
+        'entidad_display': tramite.get_entidad_display() if tramite.entidad else '',
 
         'grupo_soat': tramite.grupo_soat,
         'grupo_soat_display': tramite.get_grupo_soat_display() if tramite.grupo_soat else '',
@@ -112,6 +121,8 @@ def create_tramite(request):
 
             tipo_tramite=request.data.get('tipo_tramite', 'SOAT') or 'SOAT',
             tipo_vehiculo=request.data.get('tipo_vehiculo', '') or '',
+            # Si el cliente no envía entidad, derivar la default del tipo_vehiculo.
+            entidad=(request.data.get('entidad') or entidad_por_defecto(request.data.get('tipo_vehiculo', ''))),
 
             grupo_soat=request.data.get('grupo_soat', '') or '',
             grupo_clase_runt=request.data.get('grupo_clase_runt', '') or '',
@@ -424,6 +435,7 @@ def update_tramite(request, pk):
         # Tipo
         tramite.tipo_tramite = request.data.get('tipo_tramite', tramite.tipo_tramite)
         tramite.tipo_vehiculo = request.data.get('tipo_vehiculo', tramite.tipo_vehiculo)
+        tramite.entidad = request.data.get('entidad', tramite.entidad)
 
         # Árbol Grupo SOAT
         tramite.grupo_soat = request.data.get('grupo_soat', tramite.grupo_soat)
