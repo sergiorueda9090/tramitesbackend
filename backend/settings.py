@@ -75,6 +75,8 @@ INSTALLED_APPS = [
     'cuatro_por_mil',
     'utilidades',
     'computador_ips',
+    'plan_de_cuentas',
+    'sub_cuentas'
 ]
 
 MIDDLEWARE = [
