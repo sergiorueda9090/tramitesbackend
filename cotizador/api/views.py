@@ -692,7 +692,7 @@ def external_placa_documento_runt(request):
     tipo_documento = request.query_params.get('tipo_documento', 'C')
 
     # Construir URL del servicio RUNT externo
-    url = f"http://130.94.110.27:8080:8080/api/runt_vehiculo/{placa or ''}/{tipo_documento}/{numero_documento or ''}"
+    url = f"http://130.94.110.27:8080/api/runt_vehiculo/{placa or ''}/{tipo_documento}/{numero_documento or ''}"
 
     try:
         req = urllib.request.Request(url, method='GET')
@@ -730,7 +730,7 @@ def get_user_info_external(request):
         )
 
     # Construir URL del servicio RUNT externo
-    url = f"http://130.94.110.27:8080:8080/api/runt/{numero_documento}"
+    url = f"http://130.94.110.27:8080/api/runt/{numero_documento}"
 
     try:
         req = urllib.request.Request(url, method='GET')
@@ -770,7 +770,7 @@ def external_placa_runt(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    url = "http://130.94.110.27:8080:8080/api/tarjeta_propiedad"
+    url = "http://130.94.110.27:8080/api/tarjeta_propiedad"
 
     try:
         imagen_bytes = imagen.read()
@@ -823,7 +823,7 @@ def external_vin(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    url = "http://130.94.110.27:8080:8080/api/vin"
+    url = "http://130.94.110.27:8080/api/vin"
 
     try:
         imagen_bytes = imagen.read()
@@ -876,7 +876,7 @@ def external_runt_vehiculo_vin(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    url = f"http://130.94.110.27:8080:8080/api/runt_vehiculo_vin/{vin}"
+    url = f"http://130.94.110.27:8080/api/runt_vehiculo_vin/{vin}"
 
     try:
         req = urllib.request.Request(url, method='GET')
@@ -914,7 +914,7 @@ def api_falabella(request):
         )
 
     # Construir URL del servicio RUNT externo
-    url = f"http://130.94.110.27:8080:8080/api/previsora/{placa}"
+    url = f"http://130.94.110.27:8080/api/previsora/{placa}"
 
     try:
         req = urllib.request.Request(url, method='GET')
@@ -953,7 +953,7 @@ def get_nombre_cliente(request):
         )
 
     # Paso 1: Consultar servicio RUNT
-    url_runt = f"http://130.94.110.27:8080:8080/api/runt/{numero_documento}"
+    url_runt = f"http://130.94.110.27:8080/api/runt/{numero_documento}"
     runt_fallback = False
 
     try:
@@ -976,7 +976,7 @@ def get_nombre_cliente(request):
 
     # Paso 2: Fallback a API judicial si RUNT no tiene datos
     if runt_fallback:
-        url_judicial = f"http://130.94.110.27:8080:8080/api/judicial/cc/{numero_documento}"
+        url_judicial = f"http://130.94.110.27:8080/api/judicial/cc/{numero_documento}"
         try:
             req = urllib.request.Request(url_judicial, method='GET')
             req.add_header('Accept', 'application/json')
