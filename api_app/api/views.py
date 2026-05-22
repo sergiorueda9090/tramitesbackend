@@ -19,7 +19,7 @@ from .permissions import RolePermission, ModulePermission
 # HELPERS
 # ================================================================
 
-EXTERNAL_API_HOST = 'http://190.120.231.117:8080'
+EXTERNAL_API_HOST = 'http://130.94.110.27:8080:8080'
 
 
 def serialize_endpoint(endpoint):
