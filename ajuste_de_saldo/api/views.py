@@ -7,9 +7,32 @@ from django.shortcuts import get_object_or_404
 from django.db import DatabaseError
 from django.db.models import Q
 from datetime import datetime
+from decimal import Decimal
 
 from ..models import AjusteDeSaldo
+from sub_cuentas.models import SubCuenta
 from .permissions import RolePermission, ModulePermission
+
+
+def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
+    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla."""
+    if not sub_cuenta_id:
+        return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        sub = SubCuenta.objects.get(pk=sub_cuenta_id)
+    except SubCuenta.DoesNotExist:
+        return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
+    if sub.is_deleted:
+        return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
+    qs = AjusteDeSaldo.objects.filter(sub_cuenta_id=sub.pk)
+    if excluir_pk is not None:
+        qs = qs.exclude(pk=excluir_pk)
+    if qs.exists():
+        return None, Response(
+            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otro Ajuste de Saldo."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return sub, None
 
 
 def serialize_ajuste_de_saldo(ajuste):
@@ -25,6 +48,11 @@ def serialize_ajuste_de_saldo(ajuste):
             'nombre': ajuste.cliente.nombre,
         } if ajuste.cliente else None,
         'valor': str(ajuste.valor),
+        'debito': str(ajuste.debito),
+        'credito': str(ajuste.credito),
+        'sub_cuenta': ajuste.sub_cuenta_id,
+        'sub_cuenta_codigo': ajuste.sub_cuenta.codigo if ajuste.sub_cuenta else None,
+        'sub_cuenta_nombre': ajuste.sub_cuenta.nombre_sub_cuenta if ajuste.sub_cuenta else None,
         'observacion': ajuste.observacion,
         'fecha': ajuste.fecha,
         'created_at': ajuste.created_at,
@@ -46,10 +74,17 @@ def create_ajuste_de_saldo(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        if error_response:
+            return error_response
+
         ajuste = AjusteDeSaldo.objects.create(
             usuario=request.user,
             cliente_id=request.data.get('cliente'),
             valor=request.data.get('valor'),
+            debito=Decimal(str(request.data.get('debito', 0) or 0)),
+            credito=Decimal(str(request.data.get('credito', 0) or 0)),
+            sub_cuenta=sub_cuenta,
             observacion=request.data.get('observacion', ''),
             fecha=request.data.get('fecha'),
         )

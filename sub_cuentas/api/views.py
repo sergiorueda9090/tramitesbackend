@@ -223,11 +223,28 @@ def get_sub_cuenta(request, pk):
         )
 
 
+# Regla de negocio: las sub-cuentas son parcialmente inmutables despues de crearse.
+#   - Se permite editar UNICAMENTE: codigo, cuenta (FK a PlanDeCuentas) y nombre_sub_cuenta.
+#   - Los campos financieros (debito, credito, acumulado) son inmutables: si llegan en
+#     el payload, el PUT se rechaza con 400.
+#   - Eliminar (soft/hard) y restaurar siguen bloqueados con 405 para todos los roles,
+#     incluido SuperAdmin. La traza historica (history) sigue accesible.
+_CAMPOS_FINANCIEROS_INMUTABLES = ('debito', 'credito', 'acumulado')
+
+
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('sub_cuentas', 'edit')])
 def update_sub_cuenta(request, pk):
-    """Actualizar una sub-cuenta"""
+    """Actualizar codigo, cuenta y/o nombre_sub_cuenta. Los campos financieros son inmutables."""
     try:
+        # Rechazar inmediato si llega cualquier campo financiero, sea cual sea el valor.
+        campos_prohibidos = [c for c in _CAMPOS_FINANCIEROS_INMUTABLES if c in request.data]
+        if campos_prohibidos:
+            return Response(
+                {"error": f"Los campos {', '.join(campos_prohibidos)} no se pueden modificar despues de crear la sub-cuenta."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         sub = get_object_or_404(SubCuenta.objects, pk=pk)
 
         codigo = request.data.get('codigo')
@@ -257,16 +274,6 @@ def update_sub_cuenta(request, pk):
         if nombre_sub_cuenta is not None:
             sub.nombre_sub_cuenta = nombre_sub_cuenta
 
-        try:
-            if 'debito' in request.data:
-                sub.debito = _parse_decimal(request.data.get('debito'))
-            if 'credito' in request.data:
-                sub.credito = _parse_decimal(request.data.get('credito'))
-            if 'acumulado' in request.data:
-                sub.acumulado = _parse_decimal(request.data.get('acumulado'))
-        except ValueError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
         sub.save()
 
         return Response(serialize_sub_cuenta(sub), status=status.HTTP_200_OK)
@@ -289,59 +296,33 @@ def update_sub_cuenta(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('sub_cuentas', 'delete')])
+@permission_classes([IsAuthenticated])
 def delete_sub_cuenta(request, pk):
-    """Eliminar una sub-cuenta (soft delete)"""
-    try:
-        sub = get_object_or_404(SubCuenta.objects, pk=pk)
-        sub.soft_delete()
-        return Response(
-            {"message": "Sub-cuenta eliminada correctamente"},
-            status=status.HTTP_200_OK
-        )
-    except Exception as e:
-        return Response(
-            {"error": f"Error al eliminar sub-cuenta: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    """Bloqueado: las sub-cuentas no se pueden eliminar despues de crearse."""
+    return Response(
+        {"error": "Las sub-cuentas no se pueden eliminar despues de crearse."},
+        status=status.HTTP_405_METHOD_NOT_ALLOWED,
+    )
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('sub_cuentas', 'delete')])
+@permission_classes([IsAuthenticated])
 def restore_sub_cuenta(request, pk):
-    """Restaurar una sub-cuenta eliminada"""
-    try:
-        sub = get_object_or_404(SubCuenta.objects, pk=pk)
-        if not sub.is_deleted:
-            return Response(
-                {"error": "La sub-cuenta no esta eliminada"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        sub.restore()
-        return Response(serialize_sub_cuenta(sub), status=status.HTTP_200_OK)
-    except Exception as e:
-        return Response(
-            {"error": f"Error al restaurar sub-cuenta: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    """Bloqueado: las sub-cuentas no se eliminan, por tanto no hay restauracion."""
+    return Response(
+        {"error": "Las sub-cuentas no se pueden restaurar (no se eliminan)."},
+        status=status.HTTP_405_METHOD_NOT_ALLOWED,
+    )
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('sub_cuentas', 'delete')])
+@permission_classes([IsAuthenticated])
 def hard_delete_sub_cuenta(request, pk):
-    """Eliminar permanentemente una sub-cuenta"""
-    try:
-        sub = get_object_or_404(SubCuenta.objects, pk=pk)
-        sub.delete()
-        return Response(
-            {"message": "Sub-cuenta eliminada permanentemente"},
-            status=status.HTTP_204_NO_CONTENT
-        )
-    except Exception as e:
-        return Response(
-            {"error": f"Error al eliminar sub-cuenta: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    """Bloqueado: las sub-cuentas no se pueden eliminar despues de crearse."""
+    return Response(
+        {"error": "Las sub-cuentas no se pueden eliminar despues de crearse."},
+        status=status.HTTP_405_METHOD_NOT_ALLOWED,
+    )
 
 
 @api_view(['GET'])

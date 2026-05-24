@@ -1,5 +1,7 @@
 from django.db import models
 from django.conf import settings
+from sub_cuentas.models import SubCuenta
+from tarifario_soat.models import TarifarioSoat
 from simple_history.models import HistoricalRecords
 
 
@@ -46,6 +48,12 @@ class Cliente(models.Model):
         related_name='clientes_creados',
         help_text='Usuario que creó el registro'
     )
+    sub_cuenta = models.ForeignKey(
+        SubCuenta,
+        on_delete=models.PROTECT,
+        related_name='clientes',
+        help_text='Sub-cuenta contable asociada al cliente (obligatoria)'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -81,8 +89,12 @@ class PrecioCliente(models.Model):
         related_name='precios'
     )
     descripcion = models.CharField(max_length=255)
-    precio_lay  = models.DecimalField(max_digits=10, decimal_places=2)
-    comision    = models.DecimalField(max_digits=10, decimal_places=2)
+    codigo_tarifa = models.ForeignKey(
+        TarifarioSoat,
+        on_delete=models.PROTECT,
+        related_name='precios_clientes',
+        help_text='Codigo de tarifa del Tarifario SOAT'
+    )
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
     deleted_at  = models.DateTimeField(null=True, blank=True)
@@ -96,4 +108,5 @@ class PrecioCliente(models.Model):
         verbose_name_plural = 'Precios Clientes'
 
     def __str__(self):
-        return f'{self.descripcion} - Ley: {self.precio_lay} - Comision: {self.comision}'
+        codigo = self.codigo_tarifa.codigo_tarifa if self.codigo_tarifa else '-'
+        return f'{self.descripcion} - Tarifa: {codigo}'

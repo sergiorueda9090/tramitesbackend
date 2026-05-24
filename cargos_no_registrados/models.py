@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from clientes.models import Cliente
 from tarjetas.models import Tarjeta
+from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
 
 class CargoNoRegistrado(models.Model):
@@ -29,6 +30,16 @@ class CargoNoRegistrado(models.Model):
     
     cuatro_por_mil = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total          = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    debito  = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento débito')
+    credito = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento crédito')
+    sub_cuenta = models.ForeignKey(
+        SubCuenta,
+        on_delete=models.PROTECT,
+        unique=True,
+        related_name='cargos_no_registrados',
+        help_text='Sub-cuenta contable asociada (obligatoria y unica por registro)'
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

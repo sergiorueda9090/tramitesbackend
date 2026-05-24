@@ -13,7 +13,7 @@ from .permissions import RolePermission, ModulePermission
 
 
 def serialize_utilidad(utilidad):
-    """Serialización pública: SOLO los 6 campos del reporte de utilidad."""
+    """Serialización pública: campos del reporte de utilidad + d/c/sub-cuenta."""
     return {
         'id':                 utilidad.id,
         'fecha':              utilidad.fecha,
@@ -22,6 +22,11 @@ def serialize_utilidad(utilidad):
         'cilindraje':         utilidad.cilindraje,
         'modelo':             utilidad.modelo,
         'chasis':             utilidad.chasis,
+        'debito':             str(utilidad.debito),
+        'credito':            str(utilidad.credito),
+        'sub_cuenta':         utilidad.sub_cuenta_id,
+        'sub_cuenta_codigo':  utilidad.sub_cuenta.codigo if utilidad.sub_cuenta else None,
+        'sub_cuenta_nombre':  utilidad.sub_cuenta.nombre_sub_cuenta if utilidad.sub_cuenta else None,
     }
 
 

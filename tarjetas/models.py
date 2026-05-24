@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
 
 CUATRO_POR_MIL_CHOICES = (
@@ -24,7 +25,17 @@ class Tarjeta(models.Model):
         choices=CUATRO_POR_MIL_CHOICES,
         default='0'
     )
-    
+
+    debito  = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento débito')
+    credito = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento crédito')
+    sub_cuenta = models.ForeignKey(
+        SubCuenta,
+        on_delete=models.PROTECT,
+        unique=True,
+        related_name='tarjetas',
+        help_text='Sub-cuenta contable asociada (obligatoria y unica por tarjeta)'
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)

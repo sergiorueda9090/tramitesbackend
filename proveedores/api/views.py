@@ -9,7 +9,7 @@ from django.db.models import Q
 from datetime import datetime
 
 from proveedores.models import Proveedor
-from etiquetas.models import Etiqueta
+from sub_cuentas.models import SubCuenta
 from .permissions import RolePermission, ModulePermission
 
 
@@ -21,9 +21,9 @@ def serialize_proveedor(proveedor):
         'color': proveedor.color,
         'user': proveedor.user_id,
         'user_name': f"{proveedor.user.first_name} {proveedor.user.last_name}".strip() if proveedor.user else None,
-        'etiqueta': proveedor.etiqueta_id,
-        'etiqueta_nombre': proveedor.etiqueta.nombre if proveedor.etiqueta else None,
-        'etiqueta_color': proveedor.etiqueta.color if proveedor.etiqueta else None,
+        'sub_cuenta': proveedor.sub_cuenta_id,
+        'sub_cuenta_codigo': proveedor.sub_cuenta.codigo if proveedor.sub_cuenta else None,
+        'sub_cuenta_nombre': proveedor.sub_cuenta.nombre_sub_cuenta if proveedor.sub_cuenta else None,
         'created_at': proveedor.created_at,
         'updated_at': proveedor.updated_at,
         'deleted_at': proveedor.deleted_at,
@@ -42,18 +42,26 @@ def create_proveedor(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        color = request.data.get('color', '#1976d2')
-        etiqueta_id = request.data.get('etiqueta')
+        sub_cuenta_id = request.data.get('sub_cuenta')
+        if not sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta es obligatoria."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        sub_cuenta = get_object_or_404(SubCuenta, pk=sub_cuenta_id)
+        if sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La sub-cuenta seleccionada está eliminada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        etiqueta = None
-        if etiqueta_id:
-            etiqueta = get_object_or_404(Etiqueta, pk=etiqueta_id)
+        color = request.data.get('color', '#1976d2')
 
         proveedor = Proveedor.objects.create(
             nombre=nombre,
             color=color,
             user=request.user,
-            etiqueta=etiqueta
+            sub_cuenta=sub_cuenta,
         )
 
         return Response(serialize_proveedor(proveedor), status=status.HTTP_201_CREATED)
@@ -75,17 +83,21 @@ def create_proveedor(request):
 def list_proveedores(request):
     """Listar proveedores con filtros y paginacion"""
     try:
-        proveedores = Proveedor.objects.select_related('user', 'etiqueta').all()
+        proveedores = Proveedor.objects.select_related('user', 'sub_cuenta').all()
 
-        # Filtro de busqueda
+        # Filtro de busqueda (nombre del proveedor o codigo/nombre de la sub-cuenta)
         search_query = request.query_params.get('search', None)
         if search_query:
-            proveedores = proveedores.filter(nombre__icontains=search_query)
+            proveedores = proveedores.filter(
+                Q(nombre__icontains=search_query) |
+                Q(sub_cuenta__codigo__icontains=search_query) |
+                Q(sub_cuenta__nombre_sub_cuenta__icontains=search_query)
+            )
 
-        # Filtro por etiqueta
-        etiqueta_id = request.query_params.get('etiqueta', None)
-        if etiqueta_id:
-            proveedores = proveedores.filter(etiqueta_id=etiqueta_id)
+        # Filtro por sub-cuenta
+        sub_cuenta_id = request.query_params.get('sub_cuenta', None)
+        if sub_cuenta_id:
+            proveedores = proveedores.filter(sub_cuenta_id=sub_cuenta_id)
 
         # Filtro por fecha de creacion
         start_date_str = request.query_params.get('start_date', None)
@@ -146,7 +158,10 @@ def list_proveedores(request):
 def get_proveedor(request, pk):
     """Obtener un proveedor por ID"""
     try:
-        proveedor = get_object_or_404(Proveedor.objects.select_related('user', 'etiqueta'), pk=pk)
+        proveedor = get_object_or_404(
+            Proveedor.objects.select_related('user', 'sub_cuenta'),
+            pk=pk,
+        )
         return Response(serialize_proveedor(proveedor), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -165,12 +180,21 @@ def update_proveedor(request, pk):
         proveedor.nombre = request.data.get('nombre', proveedor.nombre)
         proveedor.color = request.data.get('color', proveedor.color)
 
-        etiqueta_id = request.data.get('etiqueta')
-        if etiqueta_id is not None:
-            if etiqueta_id:
-                proveedor.etiqueta = get_object_or_404(Etiqueta, pk=etiqueta_id)
-            else:
-                proveedor.etiqueta = None
+        # La sub-cuenta es obligatoria: no se permite ponerla en None desde el update.
+        if 'sub_cuenta' in request.data:
+            sub_cuenta_id = request.data.get('sub_cuenta')
+            if not sub_cuenta_id:
+                return Response(
+                    {"error": "La sub-cuenta es obligatoria; no puede quedar vacía."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            sub_cuenta = get_object_or_404(SubCuenta, pk=sub_cuenta_id)
+            if sub_cuenta.is_deleted:
+                return Response(
+                    {"error": "La sub-cuenta seleccionada está eliminada."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            proveedor.sub_cuenta = sub_cuenta
 
         proveedor.save()
 
@@ -277,7 +301,7 @@ def proveedor_history(request, pk):
                 } if h.history_user else None,
                 'nombre': h.nombre,
                 'color': h.color,
-                'etiqueta': h.etiqueta_id,
+                'sub_cuenta': h.sub_cuenta_id,
             })
 
         return paginator.get_paginated_response(data)

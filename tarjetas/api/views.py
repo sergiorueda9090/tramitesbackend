@@ -9,8 +9,32 @@ from django.db.models import Q
 from django.utils import timezone
 from datetime import datetime
 
+from decimal import Decimal
+
 from ..models import Tarjeta
+from sub_cuentas.models import SubCuenta
 from .permissions import RolePermission, ModulePermission
+
+
+def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
+    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla."""
+    if not sub_cuenta_id:
+        return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        sub = SubCuenta.objects.get(pk=sub_cuenta_id)
+    except SubCuenta.DoesNotExist:
+        return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
+    if sub.is_deleted:
+        return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
+    qs = Tarjeta.objects.filter(sub_cuenta_id=sub.pk)
+    if excluir_pk is not None:
+        qs = qs.exclude(pk=excluir_pk)
+    if qs.exists():
+        return None, Response(
+            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otra Tarjeta."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return sub, None
 
 
 def serialize_tarjeta(tarjeta):
@@ -26,6 +50,11 @@ def serialize_tarjeta(tarjeta):
         'descripcion': tarjeta.descripcion,
         'cuatro_por_mil': tarjeta.cuatro_por_mil,
         'cuatro_por_mil_display': tarjeta.get_cuatro_por_mil_display(),
+        'debito': str(tarjeta.debito),
+        'credito': str(tarjeta.credito),
+        'sub_cuenta': tarjeta.sub_cuenta_id,
+        'sub_cuenta_codigo': tarjeta.sub_cuenta.codigo if tarjeta.sub_cuenta else None,
+        'sub_cuenta_nombre': tarjeta.sub_cuenta.nombre_sub_cuenta if tarjeta.sub_cuenta else None,
         'created_at': tarjeta.created_at,
         'updated_at': tarjeta.updated_at,
         'deleted_at': tarjeta.deleted_at,
@@ -53,12 +82,19 @@ def create_tarjeta(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        if error_response:
+            return error_response
+
         tarjeta = Tarjeta.objects.create(
             usuario=request.user,
             numero=numero,
             titular=request.data.get('titular'),
             descripcion=request.data.get('descripcion'),
             cuatro_por_mil=request.data.get('cuatro_por_mil', '0'),
+            debito=Decimal(str(request.data.get('debito', 0) or 0)),
+            credito=Decimal(str(request.data.get('credito', 0) or 0)),
+            sub_cuenta=sub_cuenta,
         )
 
         return Response(serialize_tarjeta(tarjeta), status=status.HTTP_201_CREATED)
@@ -80,7 +116,7 @@ def create_tarjeta(request):
 def list_tarjetas(request):
     """Listar tarjetas con filtros y paginación"""
     try:
-        tarjetas = Tarjeta.objects.select_related('usuario').all()
+        tarjetas = Tarjeta.objects.select_related('usuario', 'sub_cuenta').all()
 
         # Filtro de búsqueda
         search_query = request.query_params.get('search', None)
@@ -156,7 +192,7 @@ def get_tarjeta(request, pk):
     """Obtener una tarjeta por ID"""
     try:
         tarjeta = get_object_or_404(
-            Tarjeta.objects.select_related('usuario'),
+            Tarjeta.objects.select_related('usuario', 'sub_cuenta'),
             pk=pk
         )
         return Response(serialize_tarjeta(tarjeta), status=status.HTTP_200_OK)

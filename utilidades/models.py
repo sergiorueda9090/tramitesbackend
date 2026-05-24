@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
 
 
@@ -27,6 +28,16 @@ class Utilidad(models.Model):
     cilindraje         = models.CharField(max_length=10, blank=True, default='')
     modelo             = models.CharField(max_length=4,  blank=True, default='')
     chasis             = models.CharField(max_length=50, blank=True, default='')
+
+    debito  = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento débito')
+    credito = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento crédito')
+    sub_cuenta = models.ForeignKey(
+        SubCuenta,
+        on_delete=models.PROTECT,
+        unique=True,
+        related_name='utilidades',
+        help_text='Sub-cuenta contable asociada (obligatoria y unica por registro)'
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

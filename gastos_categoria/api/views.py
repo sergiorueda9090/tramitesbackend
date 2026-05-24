@@ -7,9 +7,32 @@ from django.shortcuts import get_object_or_404
 from django.db import DatabaseError
 from django.db.models import Q
 from datetime import datetime
+from decimal import Decimal
 
 from ..models import GastoCategoria
+from sub_cuentas.models import SubCuenta
 from .permissions import RolePermission, ModulePermission
+
+
+def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
+    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla."""
+    if not sub_cuenta_id:
+        return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        sub = SubCuenta.objects.get(pk=sub_cuenta_id)
+    except SubCuenta.DoesNotExist:
+        return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
+    if sub.is_deleted:
+        return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
+    qs = GastoCategoria.objects.filter(sub_cuenta_id=sub.pk)
+    if excluir_pk is not None:
+        qs = qs.exclude(pk=excluir_pk)
+    if qs.exists():
+        return None, Response(
+            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otra Categoria de Gasto."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return sub, None
 
 
 def serialize_categoria(c):
@@ -23,6 +46,11 @@ def serialize_categoria(c):
             'name': f"{c.user.first_name} {c.user.last_name}".strip(),
             'username': c.user.username,
         } if c.user else None,
+        'debito': str(c.debito),
+        'credito': str(c.credito),
+        'sub_cuenta': c.sub_cuenta_id,
+        'sub_cuenta_codigo': c.sub_cuenta.codigo if c.sub_cuenta else None,
+        'sub_cuenta_nombre': c.sub_cuenta.nombre_sub_cuenta if c.sub_cuenta else None,
         'created_at': c.created_at,
         'updated_at': c.updated_at,
         'deleted_at': c.deleted_at,
@@ -38,10 +66,17 @@ def create_categoria(request):
         if not nombre:
             return Response({"error": "El nombre es requerido."}, status=status.HTTP_400_BAD_REQUEST)
 
+        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        if error_response:
+            return error_response
+
         categoria = GastoCategoria.objects.create(
             user=request.user,
             nombre=nombre,
             descripcion=request.data.get('descripcion', '') or '',
+            debito=Decimal(str(request.data.get('debito', 0) or 0)),
+            credito=Decimal(str(request.data.get('credito', 0) or 0)),
+            sub_cuenta=sub_cuenta,
         )
         return Response(serialize_categoria(categoria), status=status.HTTP_201_CREATED)
 

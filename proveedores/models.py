@@ -1,6 +1,6 @@
 from django.db import models
 from django.conf import settings
-from etiquetas.models import Etiqueta
+from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
 
 
@@ -14,13 +14,11 @@ class Proveedor(models.Model):
         related_name='proveedores_creados',
         help_text='Usuario que creó el registro'
     )
-    etiqueta = models.ForeignKey(
-        Etiqueta,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+    sub_cuenta = models.ForeignKey(
+        SubCuenta,
+        on_delete=models.PROTECT,
         related_name='proveedores',
-        help_text='Etiqueta asociada al proveedor'
+        help_text='Sub-cuenta contable asociada al proveedor (obligatoria)'
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -13,7 +13,59 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 
 from clientes.models import Cliente, MedioComunicacion, TipoCliente, PrecioCliente
+from sub_cuentas.models import SubCuenta
+from tarifario_soat.models import TarifarioSoat
 from .permissions import RolePermission, ModulePermission
+
+
+def _validar_codigo_tarifa(codigo_tarifa_id):
+    """Valida codigo_tarifa (FK a TarifarioSoat): obligatoria + no eliminada."""
+    if not codigo_tarifa_id:
+        return None, "El codigo_tarifa es requerido."
+    try:
+        tarifa = TarifarioSoat.objects.get(pk=codigo_tarifa_id)
+    except TarifarioSoat.DoesNotExist:
+        return None, f"El codigo de tarifa con id {codigo_tarifa_id} no existe."
+    if tarifa.is_deleted:
+        return None, f"El codigo de tarifa {tarifa.codigo_tarifa} esta eliminado."
+    return tarifa, None
+
+
+def _validar_codigo_no_duplicado(cliente, codigo_tarifa_id, excluir_precio_pk=None):
+    """Verifica que el cliente no tenga otro PrecioCliente activo con el mismo codigo_tarifa.
+
+    Devuelve (True, None) si no hay duplicado, o (False, mensaje) si lo hay.
+    Solo considera precios NO eliminados (soft-delete permite reusar codigos viejos).
+    """
+    qs = PrecioCliente.objects.filter(
+        cliente=cliente,
+        codigo_tarifa_id=codigo_tarifa_id,
+        deleted_at__isnull=True,
+    )
+    if excluir_precio_pk is not None:
+        qs = qs.exclude(pk=excluir_precio_pk)
+    existente = qs.select_related('codigo_tarifa').first()
+    if existente:
+        codigo_str = existente.codigo_tarifa.codigo_tarifa if existente.codigo_tarifa else codigo_tarifa_id
+        return False, (
+            f"El cliente ya tiene el codigo de tarifa '{codigo_str}' asignado "
+            f"al precio '{existente.descripcion}' (id {existente.id})."
+        )
+    return True, None
+
+
+def _validar_sub_cuenta(sub_cuenta_id):
+    """Valida sub_cuenta obligatoria + no eliminada. NO se exige UNIQUE (varios
+    clientes pueden compartir la misma sub-cuenta contable)."""
+    if not sub_cuenta_id:
+        return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        sub = SubCuenta.objects.get(pk=sub_cuenta_id)
+    except SubCuenta.DoesNotExist:
+        return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
+    if sub.is_deleted:
+        return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
+    return sub, None
 
 
 def serialize_precio(precio):
@@ -21,8 +73,10 @@ def serialize_precio(precio):
     return {
         'id': precio.id,
         'descripcion': precio.descripcion,
-        'precio_lay': str(precio.precio_lay),
-        'comision': str(precio.comision),
+        'codigo_tarifa': precio.codigo_tarifa_id,
+        'codigo_tarifa_codigo': precio.codigo_tarifa.codigo_tarifa if precio.codigo_tarifa else None,
+        'codigo_tarifa_descripcion': precio.codigo_tarifa.descripcion if precio.codigo_tarifa else None,
+        'codigo_tarifa_valor': str(precio.codigo_tarifa.valor) if precio.codigo_tarifa else None,
         'created_at': precio.created_at,
         'updated_at': precio.updated_at,
     }
@@ -45,6 +99,9 @@ def serialize_cliente(cliente, include_precios=True, include_precios_info=False,
         'medio_comunicacion_display': cliente.get_medio_comunicacion_display(),
         'created_by': cliente.created_by_id,
         'created_by_name': f"{cliente.created_by.first_name} {cliente.created_by.last_name}".strip() if cliente.created_by else None,
+        'sub_cuenta': cliente.sub_cuenta_id,
+        'sub_cuenta_codigo': cliente.sub_cuenta.codigo if cliente.sub_cuenta else None,
+        'sub_cuenta_nombre': cliente.sub_cuenta.nombre_sub_cuenta if cliente.sub_cuenta else None,
         'created_at': cliente.created_at,
         'updated_at': cliente.updated_at,
         'deleted_at': cliente.deleted_at,
@@ -116,6 +173,10 @@ def create_client(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        if error_response:
+            return error_response
+
         cliente = Cliente.objects.create(
             color=color,
             nombre=nombre,
@@ -125,21 +186,35 @@ def create_client(request):
             tipo_cliente=tipo_cliente,
             usuario=request.user,
             medio_comunicacion=medio_comunicacion,
-            created_by=request.user
+            created_by=request.user,
+            sub_cuenta=sub_cuenta,
         )
 
-        # Crear precios asociados al cliente
+        # Crear precios asociados al cliente — validar duplicados intra-batch y vs BD
+        codigos_vistos = set()
         for precio_data in precios_data:
             descripcion = precio_data.get('descripcion')
-            precio_lay = precio_data.get('precio_lay')
-            comision = precio_data.get('comision')
+            codigo_tarifa_id = precio_data.get('codigo_tarifa')
 
-            if descripcion and precio_lay is not None and comision is not None:
+            if descripcion and codigo_tarifa_id:
+                tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
+                if error_msg:
+                    return Response({"error": f"Precio '{descripcion}': {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                # Duplicado dentro del propio batch
+                if codigo_tarifa_id in codigos_vistos:
+                    return Response(
+                        {"error": f"Precio '{descripcion}': el codigo de tarifa '{tarifa.codigo_tarifa}' esta duplicado en la lista enviada."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                codigos_vistos.add(codigo_tarifa_id)
+                # Duplicado vs BD (siempre nuevo cliente aqui, pero validacion defensiva)
+                ok, err = _validar_codigo_no_duplicado(cliente, codigo_tarifa_id)
+                if not ok:
+                    return Response({"error": f"Precio '{descripcion}': {err}"}, status=status.HTTP_400_BAD_REQUEST)
                 PrecioCliente.objects.create(
                     cliente=cliente,
                     descripcion=descripcion,
-                    precio_lay=precio_lay,
-                    comision=comision
+                    codigo_tarifa=tarifa,
                 )
 
         return Response(serialize_cliente(cliente), status=status.HTTP_201_CREATED)
@@ -161,8 +236,8 @@ def create_client(request):
 def list_clients(request):
     """Listar clientes con filtros y paginación"""
     try:
-        clientes = Cliente.objects.select_related('usuario', 'created_by').prefetch_related(
-            Prefetch('precios', queryset=PrecioCliente.objects.filter(deleted_at__isnull=True))
+        clientes = Cliente.objects.select_related('usuario', 'created_by', 'sub_cuenta').prefetch_related(
+            Prefetch('precios', queryset=PrecioCliente.objects.select_related('codigo_tarifa').filter(deleted_at__isnull=True))
         ).annotate(
             precios_count=Count('precios', filter=Q(precios__deleted_at__isnull=True))
         )
@@ -300,7 +375,7 @@ def top_clients(request):
 def get_client(request, pk):
     """Obtener un cliente por ID"""
     try:
-        cliente = get_object_or_404(Cliente.objects.select_related('usuario', 'created_by'), pk=pk)
+        cliente = get_object_or_404(Cliente.objects.select_related('usuario', 'created_by', 'sub_cuenta'), pk=pk)
         return Response(serialize_cliente(cliente), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -339,6 +414,19 @@ def update_client(request, pk):
             )
         cliente.medio_comunicacion = medio_comunicacion
 
+        # Sub-cuenta: si llega, validar y actualizar (obligatoria; no se puede vaciar)
+        if 'sub_cuenta' in request.data:
+            sub_cuenta_id = request.data.get('sub_cuenta')
+            if not sub_cuenta_id:
+                return Response(
+                    {"error": "La sub-cuenta es obligatoria; no puede quedar vacía."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            sub_cuenta, error_response = _validar_sub_cuenta(sub_cuenta_id)
+            if error_response:
+                return error_response
+            cliente.sub_cuenta = sub_cuenta
+
         cliente.save()
 
         # Manejar precios si se envían
@@ -357,11 +445,23 @@ def update_client(request, pk):
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
+            # Validar duplicados intra-batch antes de procesar
+            codigos_batch = {}  # codigo_tarifa_id -> (descripcion, posicion)
+            for idx, precio_data in enumerate(precios_data):
+                ct_id = precio_data.get('codigo_tarifa')
+                if ct_id:
+                    if ct_id in codigos_batch:
+                        prev_desc, prev_idx = codigos_batch[ct_id]
+                        return Response(
+                            {"error": f"El codigo de tarifa esta duplicado en la lista enviada (posiciones {prev_idx + 1} y {idx + 1}: '{prev_desc}' y '{precio_data.get('descripcion','')}'). Cada cliente debe tener codigos unicos."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    codigos_batch[ct_id] = (precio_data.get('descripcion', ''), idx)
+
             for precio_data in precios_data:
-                precio_id   = precio_data.get('id')
-                descripcion = precio_data.get('descripcion')
-                precio_lay  = precio_data.get('precio_lay')
-                comision    = precio_data.get('comision')
+                precio_id        = precio_data.get('id')
+                descripcion      = precio_data.get('descripcion')
+                codigo_tarifa_id = precio_data.get('codigo_tarifa')
 
                 if precio_id:
                     # Actualizar precio existente
@@ -369,21 +469,32 @@ def update_client(request, pk):
                         precio = PrecioCliente.objects.get(pk=precio_id, cliente=cliente)
                         if descripcion:
                             precio.descripcion = descripcion
-                        if precio_lay is not None:
-                            precio.precio_lay = precio_lay
-                        if comision is not None:
-                            precio.comision = comision
+                        if codigo_tarifa_id:
+                            tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
+                            if error_msg:
+                                return Response({"error": f"Precio #{precio_id}: {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                            # Validar no duplicado contra otros precios del cliente (excluyendo este mismo)
+                            ok, err = _validar_codigo_no_duplicado(cliente, codigo_tarifa_id, excluir_precio_pk=precio.pk)
+                            if not ok:
+                                return Response({"error": f"Precio #{precio_id}: {err}"}, status=status.HTTP_400_BAD_REQUEST)
+                            precio.codigo_tarifa = tarifa
                         precio.save()
                     except PrecioCliente.DoesNotExist:
                         pass
                 else:
                     # Crear nuevo precio
-                    if descripcion and precio_lay is not None and comision is not None:
+                    if descripcion and codigo_tarifa_id:
+                        tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
+                        if error_msg:
+                            return Response({"error": f"Precio '{descripcion}': {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                        # Validar no duplicado contra precios existentes del cliente
+                        ok, err = _validar_codigo_no_duplicado(cliente, codigo_tarifa_id)
+                        if not ok:
+                            return Response({"error": f"Precio '{descripcion}': {err}"}, status=status.HTTP_400_BAD_REQUEST)
                         PrecioCliente.objects.create(
                             cliente=cliente,
                             descripcion=descripcion,
-                            precio_lay=precio_lay,
-                            comision=comision
+                            codigo_tarifa=tarifa,
                         )
 
         return Response(serialize_cliente(cliente), status=status.HTTP_200_OK)
@@ -514,8 +625,7 @@ def add_precio_cliente(request, pk):
         cliente = get_object_or_404(Cliente.objects, pk=pk)
 
         descripcion = request.data.get('descripcion')
-        precio_lay = request.data.get('precio_lay')
-        comision = request.data.get('comision')
+        codigo_tarifa_id = request.data.get('codigo_tarifa')
 
         if not descripcion:
             return Response(
@@ -523,17 +633,18 @@ def add_precio_cliente(request, pk):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if precio_lay is None or comision is None:
-            return Response(
-                {"error": "El precio de ley y la comision son requeridos."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
+        if error_msg:
+            return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        ok, err = _validar_codigo_no_duplicado(cliente, codigo_tarifa_id)
+        if not ok:
+            return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
 
         precio = PrecioCliente.objects.create(
             cliente=cliente,
             descripcion=descripcion,
-            precio_lay=precio_lay,
-            comision=comision
+            codigo_tarifa=tarifa,
         )
 
         return Response(serialize_precio(precio), status=status.HTTP_201_CREATED)
@@ -556,7 +667,7 @@ def list_precios_cliente(request, pk):
     """Listar precios de un cliente"""
     try:
         cliente = get_object_or_404(Cliente.objects, pk=pk)
-        precios = cliente.precios.filter(deleted_at__isnull=True)
+        precios = cliente.precios.select_related('codigo_tarifa').filter(deleted_at__isnull=True)
 
         data = [serialize_precio(p) for p in precios]
         return Response(data, status=status.HTTP_200_OK)
@@ -577,8 +688,16 @@ def update_precio_cliente(request, pk, precio_pk):
         precio  = get_object_or_404(PrecioCliente.objects.filter(cliente=cliente), pk=precio_pk)
 
         precio.descripcion = request.data.get('descripcion', precio.descripcion)
-        precio.precio_lay = request.data.get('precio_lay', precio.precio_lay)
-        precio.comision = request.data.get('comision', precio.comision)
+
+        if 'codigo_tarifa' in request.data:
+            codigo_tarifa_id = request.data.get('codigo_tarifa')
+            tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
+            if error_msg:
+                return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
+            ok, err = _validar_codigo_no_duplicado(cliente, codigo_tarifa_id, excluir_precio_pk=precio.pk)
+            if not ok:
+                return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
+            precio.codigo_tarifa = tarifa
 
         precio.save()
 

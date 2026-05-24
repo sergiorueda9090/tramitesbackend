@@ -12,7 +12,29 @@ from decimal import Decimal
 from ..models import Gasto, GastoRelacion
 from gastos_categoria.models import GastoCategoria
 from tarjetas.models import Tarjeta
+from sub_cuentas.models import SubCuenta
 from .permissions import RolePermission, ModulePermission
+
+
+def _validar_sub_cuenta_gasto_relacion(sub_cuenta_id, excluir_pk=None):
+    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla para GastoRelacion."""
+    if not sub_cuenta_id:
+        return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        sub = SubCuenta.objects.get(pk=sub_cuenta_id)
+    except SubCuenta.DoesNotExist:
+        return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
+    if sub.is_deleted:
+        return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
+    qs = GastoRelacion.objects.filter(sub_cuenta_id=sub.pk)
+    if excluir_pk is not None:
+        qs = qs.exclude(pk=excluir_pk)
+    if qs.exists():
+        return None, Response(
+            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otra Relacion de Gasto."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return sub, None
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
@@ -312,6 +334,11 @@ def serialize_gasto_relacion(relacion):
         'valor': str(relacion.valor),
         'cuatro_por_mil': str(relacion.cuatro_por_mil),
         'total': str(relacion.total),
+        'debito': str(relacion.debito),
+        'credito': str(relacion.credito),
+        'sub_cuenta': relacion.sub_cuenta_id,
+        'sub_cuenta_codigo': relacion.sub_cuenta.codigo if relacion.sub_cuenta else None,
+        'sub_cuenta_nombre': relacion.sub_cuenta.nombre_sub_cuenta if relacion.sub_cuenta else None,
         'observacion': relacion.observacion,
         'fecha': relacion.fecha,
         'created_at': relacion.created_at,
@@ -373,6 +400,10 @@ def create_gasto_relacion(request):
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
+        sub_cuenta, error_response = _validar_sub_cuenta_gasto_relacion(request.data.get('sub_cuenta'))
+        if error_response:
+            return error_response
+
         relacion = GastoRelacion.objects.create(
             usuario=request.user,
             gasto=gasto,
@@ -380,6 +411,9 @@ def create_gasto_relacion(request):
             valor=valor,
             cuatro_por_mil=cuatro_por_mil,
             total=total,
+            debito=Decimal(str(request.data.get('debito', 0) or 0)),
+            credito=Decimal(str(request.data.get('credito', 0) or 0)),
+            sub_cuenta=sub_cuenta,
             observacion=request.data.get('observacion', ''),
             fecha=request.data.get('fecha'),
         )
