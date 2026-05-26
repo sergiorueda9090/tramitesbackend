@@ -1,5 +1,6 @@
 import json
 import ast
+from decimal import Decimal, InvalidOperation
 
 from rest_framework.response import Response
 from rest_framework import status
@@ -16,6 +17,22 @@ from clientes.models import Cliente, MedioComunicacion, TipoCliente, PrecioClien
 from sub_cuentas.models import SubCuenta
 from tarifario_soat.models import TarifarioSoat
 from .permissions import RolePermission, ModulePermission
+
+
+def _validar_comision(comision_raw):
+    """Valida y normaliza la comision (monto en COP). Obligatoria y >= 0.
+
+    Devuelve (Decimal, None) si es valida, o (None, mensaje) si no lo es.
+    """
+    if comision_raw is None or comision_raw == '':
+        return None, "La comision es requerida."
+    try:
+        comision = Decimal(str(comision_raw))
+    except (InvalidOperation, ValueError, TypeError):
+        return None, "La comision debe ser un valor numerico."
+    if comision < 0:
+        return None, "La comision no puede ser negativa."
+    return comision, None
 
 
 def _validar_codigo_tarifa(codigo_tarifa_id):
@@ -49,7 +66,7 @@ def _validar_codigo_no_duplicado(cliente, codigo_tarifa_id, excluir_precio_pk=No
         codigo_str = existente.codigo_tarifa.codigo_tarifa if existente.codigo_tarifa else codigo_tarifa_id
         return False, (
             f"El cliente ya tiene el codigo de tarifa '{codigo_str}' asignado "
-            f"al precio '{existente.descripcion}' (id {existente.id})."
+            f"(precio id {existente.id})."
         )
     return True, None
 
@@ -72,7 +89,7 @@ def serialize_precio(precio):
     """Convierte un objeto PrecioCliente a diccionario"""
     return {
         'id': precio.id,
-        'descripcion': precio.descripcion,
+        'comision': str(precio.comision) if precio.comision is not None else None,
         'codigo_tarifa': precio.codigo_tarifa_id,
         'codigo_tarifa_codigo': precio.codigo_tarifa.codigo_tarifa if precio.codigo_tarifa else None,
         'codigo_tarifa_descripcion': precio.codigo_tarifa.descripcion if precio.codigo_tarifa else None,
@@ -193,28 +210,30 @@ def create_client(request):
         # Crear precios asociados al cliente — validar duplicados intra-batch y vs BD
         codigos_vistos = set()
         for precio_data in precios_data:
-            descripcion = precio_data.get('descripcion')
             codigo_tarifa_id = precio_data.get('codigo_tarifa')
 
-            if descripcion and codigo_tarifa_id:
+            if codigo_tarifa_id:
                 tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
                 if error_msg:
-                    return Response({"error": f"Precio '{descripcion}': {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": f"Precio (tarifa {codigo_tarifa_id}): {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                comision, error_msg = _validar_comision(precio_data.get('comision'))
+                if error_msg:
+                    return Response({"error": f"Precio (tarifa {tarifa.codigo_tarifa}): {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
                 # Duplicado dentro del propio batch
                 if codigo_tarifa_id in codigos_vistos:
                     return Response(
-                        {"error": f"Precio '{descripcion}': el codigo de tarifa '{tarifa.codigo_tarifa}' esta duplicado en la lista enviada."},
+                        {"error": f"El codigo de tarifa '{tarifa.codigo_tarifa}' esta duplicado en la lista enviada."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 codigos_vistos.add(codigo_tarifa_id)
                 # Duplicado vs BD (siempre nuevo cliente aqui, pero validacion defensiva)
                 ok, err = _validar_codigo_no_duplicado(cliente, codigo_tarifa_id)
                 if not ok:
-                    return Response({"error": f"Precio '{descripcion}': {err}"}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": f"Precio (tarifa {tarifa.codigo_tarifa}): {err}"}, status=status.HTTP_400_BAD_REQUEST)
                 PrecioCliente.objects.create(
                     cliente=cliente,
-                    descripcion=descripcion,
                     codigo_tarifa=tarifa,
+                    comision=comision,
                 )
 
         return Response(serialize_cliente(cliente), status=status.HTTP_201_CREATED)
@@ -446,29 +465,31 @@ def update_client(request, pk):
                         )
 
             # Validar duplicados intra-batch antes de procesar
-            codigos_batch = {}  # codigo_tarifa_id -> (descripcion, posicion)
+            codigos_batch = {}  # codigo_tarifa_id -> posicion
             for idx, precio_data in enumerate(precios_data):
                 ct_id = precio_data.get('codigo_tarifa')
                 if ct_id:
                     if ct_id in codigos_batch:
-                        prev_desc, prev_idx = codigos_batch[ct_id]
+                        prev_idx = codigos_batch[ct_id]
                         return Response(
-                            {"error": f"El codigo de tarifa esta duplicado en la lista enviada (posiciones {prev_idx + 1} y {idx + 1}: '{prev_desc}' y '{precio_data.get('descripcion','')}'). Cada cliente debe tener codigos unicos."},
+                            {"error": f"El codigo de tarifa esta duplicado en la lista enviada (posiciones {prev_idx + 1} y {idx + 1}). Cada cliente debe tener codigos unicos."},
                             status=status.HTTP_400_BAD_REQUEST,
                         )
-                    codigos_batch[ct_id] = (precio_data.get('descripcion', ''), idx)
+                    codigos_batch[ct_id] = idx
 
             for precio_data in precios_data:
                 precio_id        = precio_data.get('id')
-                descripcion      = precio_data.get('descripcion')
                 codigo_tarifa_id = precio_data.get('codigo_tarifa')
 
                 if precio_id:
                     # Actualizar precio existente
                     try:
                         precio = PrecioCliente.objects.get(pk=precio_id, cliente=cliente)
-                        if descripcion:
-                            precio.descripcion = descripcion
+                        if 'comision' in precio_data:
+                            comision, error_msg = _validar_comision(precio_data.get('comision'))
+                            if error_msg:
+                                return Response({"error": f"Precio #{precio_id}: {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                            precio.comision = comision
                         if codigo_tarifa_id:
                             tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
                             if error_msg:
@@ -483,18 +504,21 @@ def update_client(request, pk):
                         pass
                 else:
                     # Crear nuevo precio
-                    if descripcion and codigo_tarifa_id:
+                    if codigo_tarifa_id:
                         tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
                         if error_msg:
-                            return Response({"error": f"Precio '{descripcion}': {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                            return Response({"error": f"Precio (tarifa {codigo_tarifa_id}): {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
+                        comision, error_msg = _validar_comision(precio_data.get('comision'))
+                        if error_msg:
+                            return Response({"error": f"Precio (tarifa {tarifa.codigo_tarifa}): {error_msg}"}, status=status.HTTP_400_BAD_REQUEST)
                         # Validar no duplicado contra precios existentes del cliente
                         ok, err = _validar_codigo_no_duplicado(cliente, codigo_tarifa_id)
                         if not ok:
-                            return Response({"error": f"Precio '{descripcion}': {err}"}, status=status.HTTP_400_BAD_REQUEST)
+                            return Response({"error": f"Precio (tarifa {tarifa.codigo_tarifa}): {err}"}, status=status.HTTP_400_BAD_REQUEST)
                         PrecioCliente.objects.create(
                             cliente=cliente,
-                            descripcion=descripcion,
                             codigo_tarifa=tarifa,
+                            comision=comision,
                         )
 
         return Response(serialize_cliente(cliente), status=status.HTTP_200_OK)
@@ -624,16 +648,13 @@ def add_precio_cliente(request, pk):
     try:
         cliente = get_object_or_404(Cliente.objects, pk=pk)
 
-        descripcion = request.data.get('descripcion')
         codigo_tarifa_id = request.data.get('codigo_tarifa')
 
-        if not descripcion:
-            return Response(
-                {"error": "La descripcion es requerida."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         tarifa, error_msg = _validar_codigo_tarifa(codigo_tarifa_id)
+        if error_msg:
+            return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        comision, error_msg = _validar_comision(request.data.get('comision'))
         if error_msg:
             return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -643,8 +664,8 @@ def add_precio_cliente(request, pk):
 
         precio = PrecioCliente.objects.create(
             cliente=cliente,
-            descripcion=descripcion,
             codigo_tarifa=tarifa,
+            comision=comision,
         )
 
         return Response(serialize_precio(precio), status=status.HTTP_201_CREATED)
@@ -687,7 +708,11 @@ def update_precio_cliente(request, pk, precio_pk):
         cliente = get_object_or_404(Cliente.objects, pk=pk)
         precio  = get_object_or_404(PrecioCliente.objects.filter(cliente=cliente), pk=precio_pk)
 
-        precio.descripcion = request.data.get('descripcion', precio.descripcion)
+        if 'comision' in request.data:
+            comision, error_msg = _validar_comision(request.data.get('comision'))
+            if error_msg:
+                return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
+            precio.comision = comision
 
         if 'codigo_tarifa' in request.data:
             codigo_tarifa_id = request.data.get('codigo_tarifa')

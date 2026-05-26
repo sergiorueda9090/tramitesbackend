@@ -88,12 +88,16 @@ class PrecioCliente(models.Model):
         on_delete=models.CASCADE,
         related_name='precios'
     )
-    descripcion = models.CharField(max_length=255)
     codigo_tarifa = models.ForeignKey(
         TarifarioSoat,
         on_delete=models.PROTECT,
         related_name='precios_clientes',
         help_text='Codigo de tarifa del Tarifario SOAT'
+    )
+    comision = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text='Comision (COP) que agrega el cliente para esta tarifa'
     )
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
@@ -109,4 +113,4 @@ class PrecioCliente(models.Model):
 
     def __str__(self):
         codigo = self.codigo_tarifa.codigo_tarifa if self.codigo_tarifa else '-'
-        return f'{self.descripcion} - Tarifa: {codigo}'
+        return f'Tarifa: {codigo} - Comision: {self.comision}'
