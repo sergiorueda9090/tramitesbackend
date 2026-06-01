@@ -4,19 +4,28 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Q
+from django.core.exceptions import ValidationError
 from datetime import datetime
 from decimal import Decimal
 
 from ..models import UtilidadOcasional
 from tarjetas.models import Tarjeta
 from sub_cuentas.models import SubCuenta
+from movimiento_contable.services import registrar_asiento, revertir_asiento
 from .permissions import RolePermission, ModulePermission
 
 
+MODULO_ORIGEN = 'utilidad_ocasional'
+
+
+def _descripcion_asiento(u):
+    return f"Utilidad ocasional #{u.id} | Tarjeta: {u.tarjeta.numero}"
+
+
 def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
-    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla."""
+    """Valida sub_cuenta obligatoria + no eliminada."""
     if not sub_cuenta_id:
         return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
     try:
@@ -25,14 +34,6 @@ def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
         return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
     if sub.is_deleted:
         return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
-    qs = UtilidadOcasional.objects.filter(sub_cuenta_id=sub.pk)
-    if excluir_pk is not None:
-        qs = qs.exclude(pk=excluir_pk)
-    if qs.exists():
-        return None, Response(
-            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otra Utilidad Ocasional."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
     return sub, None
 
 
@@ -65,6 +66,7 @@ def serialize_utilidad_ocasional(utilidad):
         'sub_cuenta': utilidad.sub_cuenta_id,
         'sub_cuenta_codigo': utilidad.sub_cuenta.codigo if utilidad.sub_cuenta else None,
         'sub_cuenta_nombre': utilidad.sub_cuenta.nombre_sub_cuenta if utilidad.sub_cuenta else None,
+        'asiento_id': str(utilidad.asiento_id) if utilidad.asiento_id else None,
         'observacion': utilidad.observacion,
         'fecha': utilidad.fecha,
         'created_at': utilidad.created_at,
@@ -76,7 +78,13 @@ def serialize_utilidad_ocasional(utilidad):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('utilidad_ocasional', 'create')])
 def create_utilidad_ocasional(request):
-    """Crear una nueva utilidad ocasional"""
+    """Crear una nueva utilidad ocasional + asiento contable (partida doble).
+
+    Asiento:
+      - Debito  -> tarjeta.sub_cuenta   (banco que recibe el ingreso sube).
+      - Credito -> utilidad.sub_cuenta  (cuenta de ingreso del PUC).
+      - Valor   -> utilidad.total       (valor + 4x1000).
+    """
     try:
         required_fields = ['tarjeta', 'valor', 'fecha']
         for field in required_fields:
@@ -86,17 +94,15 @@ def create_utilidad_ocasional(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # Validar que el usuario exista
         if not request.user or not request.user.is_authenticated:
             return Response(
                 {"error": "Usuario no autenticado."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Validar que la tarjeta exista
         tarjeta_id = request.data.get('tarjeta')
         try:
-            tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+            tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
             if tarjeta.deleted_at is not None:
                 return Response(
                     {"error": "La tarjeta especificada está eliminada."},
@@ -108,26 +114,61 @@ def create_utilidad_ocasional(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         valor = Decimal(request.data.get('valor'))
+        if valor <= 0:
+            return Response(
+                {"error": "El valor de la utilidad ocasional debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
-        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        sub_cuenta_credito, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
         if error_response:
             return error_response
 
-        utilidad = UtilidadOcasional.objects.create(
-            usuario=request.user,
-            tarjeta=tarjeta,
-            valor=valor,
-            cuatro_por_mil=cuatro_por_mil,
-            total=total,
-            debito=Decimal(str(request.data.get('debito', 0) or 0)),
-            credito=Decimal(str(request.data.get('credito', 0) or 0)),
-            sub_cuenta=sub_cuenta,
-            observacion=request.data.get('observacion', ''),
-            fecha=request.data.get('fecha'),
-        )
+        if sub_cuenta_credito.pk == tarjeta.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de la utilidad (credito) no puede ser la misma que la de la tarjeta (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                utilidad = UtilidadOcasional.objects.create(
+                    usuario=request.user,
+                    tarjeta=tarjeta,
+                    valor=valor,
+                    cuatro_por_mil=cuatro_por_mil,
+                    total=total,
+                    debito=total,
+                    credito=total,
+                    sub_cuenta=sub_cuenta_credito,
+                    observacion=request.data.get('observacion', ''),
+                    fecha=request.data.get('fecha'),
+                )
+
+                asiento_id = registrar_asiento(
+                    fecha=utilidad.fecha,
+                    debito_sub_cuenta=tarjeta.sub_cuenta,
+                    credito_sub_cuenta=sub_cuenta_credito,
+                    valor=total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=utilidad.id,
+                    descripcion=_descripcion_asiento(utilidad),
+                    usuario=request.user,
+                )
+                UtilidadOcasional.objects.filter(pk=utilidad.pk).update(asiento_id=asiento_id)
+                utilidad.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_utilidad_ocasional(utilidad), status=status.HTTP_201_CREATED)
 
@@ -269,16 +310,20 @@ def get_utilidad_ocasional(request, pk):
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('utilidad_ocasional', 'edit')])
 def update_utilidad_ocasional(request, pk):
-    """Actualizar una utilidad ocasional"""
-    try:
-        utilidad = get_object_or_404(UtilidadOcasional.objects.select_related('tarjeta'), pk=pk)
+    """Actualizar una utilidad ocasional.
 
-        # Validar que la tarjeta exista si se proporciona
+    Cualquier cambio revierte el asiento previo y registra uno nuevo (atomico).
+    """
+    try:
+        utilidad = get_object_or_404(
+            UtilidadOcasional.objects.select_related('tarjeta__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
+
         tarjeta = utilidad.tarjeta
         if 'tarjeta' in request.data:
             tarjeta_id = request.data.get('tarjeta')
             try:
-                tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+                tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
                 if tarjeta.deleted_at is not None:
                     return Response(
                         {"error": "La tarjeta especificada está eliminada."},
@@ -291,18 +336,59 @@ def update_utilidad_ocasional(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Actualizar otros campos
+        if 'sub_cuenta' in request.data:
+            sub_cuenta_credito, error_response = _validar_sub_cuenta(
+                request.data.get('sub_cuenta'), excluir_pk=utilidad.pk
+            )
+            if error_response:
+                return error_response
+            utilidad.sub_cuenta = sub_cuenta_credito
+
         utilidad.valor = request.data.get('valor', utilidad.valor)
         utilidad.observacion = request.data.get('observacion', utilidad.observacion)
         utilidad.fecha = request.data.get('fecha', utilidad.fecha)
 
-        # Recalcular cuatro_por_mil y total si cambió valor o tarjeta
-        if 'valor' in request.data or 'tarjeta' in request.data:
-            valor = Decimal(utilidad.valor)
-            utilidad.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-            utilidad.total = valor + utilidad.cuatro_por_mil
+        valor = Decimal(utilidad.valor)
+        if valor <= 0:
+            return Response(
+                {"error": "El valor de la utilidad ocasional debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        utilidad.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+        utilidad.total = valor + utilidad.cuatro_por_mil
+        utilidad.debito = utilidad.total
+        utilidad.credito = utilidad.total
 
-        utilidad.save()
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if utilidad.sub_cuenta_id == tarjeta.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de la utilidad no puede ser la misma que la de la tarjeta."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                revertir_asiento(utilidad.asiento_id)
+                utilidad.save()
+                asiento_id = registrar_asiento(
+                    fecha=utilidad.fecha,
+                    debito_sub_cuenta=tarjeta.sub_cuenta,
+                    credito_sub_cuenta=utilidad.sub_cuenta,
+                    valor=utilidad.total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=utilidad.id,
+                    descripcion=_descripcion_asiento(utilidad),
+                    usuario=request.user,
+                )
+                UtilidadOcasional.objects.filter(pk=utilidad.pk).update(asiento_id=asiento_id)
+                utilidad.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_utilidad_ocasional(utilidad), status=status.HTTP_200_OK)
 
@@ -321,10 +407,14 @@ def update_utilidad_ocasional(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('utilidad_ocasional', 'delete')])
 def delete_utilidad_ocasional(request, pk):
-    """Eliminar una utilidad ocasional (soft delete)"""
+    """Eliminar una utilidad ocasional (soft delete) y revertir su asiento."""
     try:
         utilidad = get_object_or_404(UtilidadOcasional.objects, pk=pk)
-        utilidad.soft_delete()
+        with transaction.atomic():
+            revertir_asiento(utilidad.asiento_id)
+            UtilidadOcasional.objects.filter(pk=utilidad.pk).update(asiento_id=None)
+            utilidad.refresh_from_db(fields=['asiento_id'])
+            utilidad.soft_delete()
         return Response(
             {"message": "Utilidad ocasional eliminada correctamente"},
             status=status.HTTP_200_OK
@@ -339,15 +429,48 @@ def delete_utilidad_ocasional(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('utilidad_ocasional', 'delete')])
 def restore_utilidad_ocasional(request, pk):
-    """Restaurar una utilidad ocasional eliminada"""
+    """Restaurar una utilidad ocasional eliminada y volver a registrar el asiento."""
     try:
-        utilidad = get_object_or_404(UtilidadOcasional.objects, pk=pk)
+        utilidad = get_object_or_404(
+            UtilidadOcasional.objects.select_related('tarjeta__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
         if not utilidad.is_deleted:
             return Response(
                 {"error": "La utilidad ocasional no está eliminada"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        utilidad.restore()
+
+        tarjeta = utilidad.tarjeta
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if utilidad.sub_cuenta_id == tarjeta.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de la utilidad no puede ser la misma que la de la tarjeta; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                utilidad.restore()
+                asiento_id = registrar_asiento(
+                    fecha=utilidad.fecha,
+                    debito_sub_cuenta=tarjeta.sub_cuenta,
+                    credito_sub_cuenta=utilidad.sub_cuenta,
+                    valor=utilidad.total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=utilidad.id,
+                    descripcion=_descripcion_asiento(utilidad),
+                    usuario=request.user,
+                )
+                UtilidadOcasional.objects.filter(pk=utilidad.pk).update(asiento_id=asiento_id)
+                utilidad.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         return Response(serialize_utilidad_ocasional(utilidad), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -359,10 +482,12 @@ def restore_utilidad_ocasional(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('utilidad_ocasional', 'delete')])
 def hard_delete_utilidad_ocasional(request, pk):
-    """Eliminar permanentemente una utilidad ocasional"""
+    """Eliminar permanentemente una utilidad ocasional (revierte el asiento si seguia activo)."""
     try:
         utilidad = get_object_or_404(UtilidadOcasional.objects, pk=pk)
-        utilidad.delete()
+        with transaction.atomic():
+            revertir_asiento(utilidad.asiento_id)
+            utilidad.delete()
         return Response(
             {"message": "Utilidad ocasional eliminada permanentemente"},
             status=status.HTTP_204_NO_CONTENT

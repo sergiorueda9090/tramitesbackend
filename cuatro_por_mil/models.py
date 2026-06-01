@@ -56,9 +56,8 @@ class CuatroPorMil(models.Model):
     sub_cuenta = models.ForeignKey(
         SubCuenta,
         on_delete=models.PROTECT,
-        unique=True,
         related_name='cuatro_por_mil_registros',
-        help_text='Sub-cuenta contable asociada (obligatoria y unica por registro)'
+        help_text='Sub-cuenta contable de debito asociada al registro'
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

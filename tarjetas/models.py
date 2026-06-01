@@ -31,9 +31,8 @@ class Tarjeta(models.Model):
     sub_cuenta = models.ForeignKey(
         SubCuenta,
         on_delete=models.PROTECT,
-        unique=True,
         related_name='tarjetas',
-        help_text='Sub-cuenta contable asociada (obligatoria y unica por tarjeta)'
+        help_text='Sub-cuenta contable asociada a la tarjeta'
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

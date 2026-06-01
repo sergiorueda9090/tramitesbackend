@@ -4,6 +4,7 @@ from clientes.models import Cliente
 from tarjetas.models import Tarjeta
 from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
+import uuid
 
 class RecepcionPago(models.Model):
     usuario = models.ForeignKey(
@@ -36,9 +37,13 @@ class RecepcionPago(models.Model):
     sub_cuenta = models.ForeignKey(
         SubCuenta,
         on_delete=models.PROTECT,
-        unique=True,
         related_name='recepciones_pago',
-        help_text='Sub-cuenta contable asociada (obligatoria y unica por registro)'
+        help_text='Sub-cuenta contable de debito asociada al registro'
+    )
+
+    asiento_id = models.UUIDField(
+        null=True, blank=True, default=None, editable=False,
+        help_text='UUID del asiento contable activo en MovimientoContable (null si aun no se registro o fue revertido)'
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

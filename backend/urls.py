@@ -54,6 +54,7 @@ urlpatterns = [
     path('api/computador_ips/',       include('computador_ips.api.urls'),       name="computador_ips"),
     path('api/plan_de_cuentas/',      include('plan_de_cuentas.api.urls'),      name="plan_de_cuentas"),
     path('api/sub_cuentas/',          include('sub_cuentas.api.urls'),          name="sub_cuentas"),
+    path('api/movimiento_contable/',  include('movimiento_contable.api.urls'),  name="movimiento_contable"),
 ]
 
 # En dev, servir archivos de MEDIA_ROOT vía Django.

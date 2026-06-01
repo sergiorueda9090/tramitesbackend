@@ -3,6 +3,7 @@ from django.conf import settings
 from tarjetas.models import Tarjeta
 from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
+import uuid
 
 
 class UtilidadOcasional(models.Model):
@@ -30,9 +31,13 @@ class UtilidadOcasional(models.Model):
     sub_cuenta = models.ForeignKey(
         SubCuenta,
         on_delete=models.PROTECT,
-        unique=True,
         related_name='utilidad_ocasional_registros',
-        help_text='Sub-cuenta contable asociada (obligatoria y unica por registro)'
+        help_text='Sub-cuenta contable de credito (ingreso) asociada al registro'
+    )
+
+    asiento_id = models.UUIDField(
+        null=True, blank=True, default=None, editable=False,
+        help_text='UUID del asiento contable activo en MovimientoContable (null si aun no se registro o fue revertido)'
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

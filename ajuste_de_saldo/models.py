@@ -3,6 +3,7 @@ from django.conf import settings
 from clientes.models import Cliente
 from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
+import uuid
 
 class AjusteDeSaldo(models.Model):
     usuario = models.ForeignKey(
@@ -26,9 +27,13 @@ class AjusteDeSaldo(models.Model):
     sub_cuenta = models.ForeignKey(
         SubCuenta,
         on_delete=models.PROTECT,
-        unique=True,
         related_name='ajustes_de_saldo',
-        help_text='Sub-cuenta contable asociada (obligatoria y unica por registro)'
+        help_text='Sub-cuenta contraparte del ajuste (la otra es la del cliente)'
+    )
+
+    asiento_id = models.UUIDField(
+        null=True, blank=True, default=None, editable=False,
+        help_text='UUID del asiento contable activo en MovimientoContable (null si aun no se registro o fue revertido)'
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

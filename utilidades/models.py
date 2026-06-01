@@ -2,6 +2,7 @@ from django.db import models
 from django.utils import timezone
 from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
+import uuid
 
 
 class Utilidad(models.Model):
@@ -34,9 +35,14 @@ class Utilidad(models.Model):
     sub_cuenta = models.ForeignKey(
         SubCuenta,
         on_delete=models.PROTECT,
-        unique=True,
         related_name='utilidades',
-        help_text='Sub-cuenta contable asociada (obligatoria y unica por registro)'
+        null=True, blank=True,
+        help_text='Sub-cuenta contable de credito (ingreso por utilidad). Puede quedar null si no esta configurada UTILIDADES_SUB_CUENTA_CODIGO'
+    )
+
+    asiento_id = models.UUIDField(
+        null=True, blank=True, default=None, editable=False,
+        help_text='UUID del asiento contable activo en MovimientoContable (null si aun no se registro o fue revertido)'
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

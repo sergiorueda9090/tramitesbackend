@@ -4,18 +4,59 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Q
+from django.core.exceptions import ValidationError
 from datetime import datetime
 from decimal import Decimal
 
 from ..models import AjusteDeSaldo
+from clientes.models import Cliente
 from sub_cuentas.models import SubCuenta
+from movimiento_contable.services import registrar_asiento, revertir_asiento
 from .permissions import RolePermission, ModulePermission
 
 
+MODULO_ORIGEN = 'ajuste_de_saldo'
+
+
+def _descripcion_asiento(ajuste):
+    return f"Ajuste de saldo #{ajuste.id} | Cliente: {ajuste.cliente.nombre}"
+
+
+def _decimal_or_zero(v):
+    try:
+        return Decimal(str(v)) if v not in (None, '') else Decimal('0')
+    except Exception:
+        return Decimal('0')
+
+
+def _resolver_direccion_asiento(payload):
+    """A partir del payload, devuelve (monto, sentido, error_response).
+
+    sentido = 'debito_cliente'  → D=cliente.sub_cuenta, C=ajuste.sub_cuenta
+              'credito_cliente' → D=ajuste.sub_cuenta,  C=cliente.sub_cuenta
+    """
+    debito  = _decimal_or_zero(payload.get('debito'))
+    credito = _decimal_or_zero(payload.get('credito'))
+
+    if debito > 0 and credito > 0:
+        return None, None, Response(
+            {"error": "El ajuste debe traer solo debito o solo credito, no ambos."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if debito <= 0 and credito <= 0:
+        return None, None, Response(
+            {"error": "El ajuste debe traer un debito o un credito mayor a 0."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if debito > 0:
+        return debito, 'debito_cliente', None
+    return credito, 'credito_cliente', None
+
+
 def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
-    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla."""
+    """Valida sub_cuenta obligatoria + no eliminada."""
     if not sub_cuenta_id:
         return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
     try:
@@ -24,14 +65,6 @@ def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
         return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
     if sub.is_deleted:
         return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
-    qs = AjusteDeSaldo.objects.filter(sub_cuenta_id=sub.pk)
-    if excluir_pk is not None:
-        qs = qs.exclude(pk=excluir_pk)
-    if qs.exists():
-        return None, Response(
-            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otro Ajuste de Saldo."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
     return sub, None
 
 
@@ -53,6 +86,7 @@ def serialize_ajuste_de_saldo(ajuste):
         'sub_cuenta': ajuste.sub_cuenta_id,
         'sub_cuenta_codigo': ajuste.sub_cuenta.codigo if ajuste.sub_cuenta else None,
         'sub_cuenta_nombre': ajuste.sub_cuenta.nombre_sub_cuenta if ajuste.sub_cuenta else None,
+        'asiento_id': str(ajuste.asiento_id) if ajuste.asiento_id else None,
         'observacion': ajuste.observacion,
         'fecha': ajuste.fecha,
         'created_at': ajuste.created_at,
@@ -64,9 +98,14 @@ def serialize_ajuste_de_saldo(ajuste):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('ajuste_saldo', 'create')])
 def create_ajuste_de_saldo(request):
-    """Crear un nuevo ajuste de saldo"""
+    """Crear un nuevo ajuste de saldo + asiento contable (partida doble).
+
+    Direccion del asiento (segun payload):
+      - debito  > 0 → D=cliente.sub_cuenta, C=ajuste.sub_cuenta (deuda sube).
+      - credito > 0 → D=ajuste.sub_cuenta,  C=cliente.sub_cuenta (deuda baja).
+    """
     try:
-        required_fields = ['cliente', 'valor', 'fecha']
+        required_fields = ['cliente', 'fecha']
         for field in required_fields:
             if not request.data.get(field):
                 return Response(
@@ -74,20 +113,76 @@ def create_ajuste_de_saldo(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        monto, sentido, error_response = _resolver_direccion_asiento(request.data)
         if error_response:
             return error_response
 
-        ajuste = AjusteDeSaldo.objects.create(
-            usuario=request.user,
-            cliente_id=request.data.get('cliente'),
-            valor=request.data.get('valor'),
-            debito=Decimal(str(request.data.get('debito', 0) or 0)),
-            credito=Decimal(str(request.data.get('credito', 0) or 0)),
-            sub_cuenta=sub_cuenta,
-            observacion=request.data.get('observacion', ''),
-            fecha=request.data.get('fecha'),
-        )
+        try:
+            cliente = Cliente.objects.select_related('sub_cuenta').get(pk=request.data.get('cliente'))
+            if cliente.deleted_at is not None:
+                return Response(
+                    {"error": "El cliente especificado está eliminado."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except Cliente.DoesNotExist:
+            return Response(
+                {"error": "El cliente especificado no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if cliente.sub_cuenta_id is None or cliente.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        sub_cuenta_contraparte, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        if error_response:
+            return error_response
+
+        if sub_cuenta_contraparte.pk == cliente.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del ajuste no puede ser la misma que la del cliente."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if sentido == 'debito_cliente':
+            debito_sub_cuenta  = cliente.sub_cuenta
+            credito_sub_cuenta = sub_cuenta_contraparte
+            debito_val, credito_val = monto, Decimal('0')
+        else:
+            debito_sub_cuenta  = sub_cuenta_contraparte
+            credito_sub_cuenta = cliente.sub_cuenta
+            debito_val, credito_val = Decimal('0'), monto
+
+        try:
+            with transaction.atomic():
+                ajuste = AjusteDeSaldo.objects.create(
+                    usuario=request.user,
+                    cliente=cliente,
+                    valor=monto,
+                    debito=debito_val,
+                    credito=credito_val,
+                    sub_cuenta=sub_cuenta_contraparte,
+                    observacion=request.data.get('observacion', ''),
+                    fecha=request.data.get('fecha'),
+                )
+
+                asiento_id = registrar_asiento(
+                    fecha=ajuste.fecha,
+                    debito_sub_cuenta=debito_sub_cuenta,
+                    credito_sub_cuenta=credito_sub_cuenta,
+                    valor=monto,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=ajuste.id,
+                    descripcion=_descripcion_asiento(ajuste),
+                    usuario=request.user,
+                )
+                AjusteDeSaldo.objects.filter(pk=ajuste.pk).update(asiento_id=asiento_id)
+                ajuste.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_ajuste_de_saldo(ajuste), status=status.HTTP_201_CREATED)
 
@@ -228,20 +323,105 @@ def get_ajuste_de_saldo(request, pk):
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('ajuste_saldo', 'edit')])
 def update_ajuste_de_saldo(request, pk):
-    """Actualizar un ajuste de saldo"""
+    """Actualizar un ajuste de saldo.
+
+    Cualquier cambio revierte el asiento previo y registra uno nuevo (atomico).
+    Si el payload trae debito o credito, recalcula la direccion del asiento.
+    Si no, mantiene los valores actuales del registro.
+    """
     try:
-        ajuste = get_object_or_404(AjusteDeSaldo.objects, pk=pk)
+        ajuste = get_object_or_404(
+            AjusteDeSaldo.objects.select_related('cliente__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
 
-        # Actualizar FK si se proporciona
         if 'cliente' in request.data:
-            ajuste.cliente_id = request.data.get('cliente')
+            try:
+                cliente = Cliente.objects.select_related('sub_cuenta').get(pk=request.data.get('cliente'))
+                if cliente.deleted_at is not None:
+                    return Response(
+                        {"error": "El cliente especificado está eliminado."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                ajuste.cliente = cliente
+            except Cliente.DoesNotExist:
+                return Response(
+                    {"error": "El cliente especificado no existe."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-        # Actualizar otros campos
-        ajuste.valor = request.data.get('valor', ajuste.valor)
+        if 'sub_cuenta' in request.data:
+            sub_cuenta_contraparte, error_response = _validar_sub_cuenta(
+                request.data.get('sub_cuenta'), excluir_pk=ajuste.pk
+            )
+            if error_response:
+                return error_response
+            ajuste.sub_cuenta = sub_cuenta_contraparte
+
+        # Determinar la direccion: si el payload trae debito o credito, usar eso.
+        # Si no, usar lo que ya tenia el registro.
+        if 'debito' in request.data or 'credito' in request.data:
+            sintetico = {
+                'debito':  request.data.get('debito',  ajuste.debito),
+                'credito': request.data.get('credito', ajuste.credito),
+            }
+            monto, sentido, error_response = _resolver_direccion_asiento(sintetico)
+            if error_response:
+                return error_response
+        else:
+            if ajuste.debito > 0 and ajuste.credito == 0:
+                monto, sentido = ajuste.debito, 'debito_cliente'
+            elif ajuste.credito > 0 and ajuste.debito == 0:
+                monto, sentido = ajuste.credito, 'credito_cliente'
+            else:
+                return Response(
+                    {"error": "El ajuste existente no tiene una direccion contable valida; envia debito o credito."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         ajuste.observacion = request.data.get('observacion', ajuste.observacion)
         ajuste.fecha = request.data.get('fecha', ajuste.fecha)
+        ajuste.valor = monto
 
-        ajuste.save()
+        cliente_actual = ajuste.cliente
+        if cliente_actual.sub_cuenta_id is None or cliente_actual.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if ajuste.sub_cuenta_id == cliente_actual.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del ajuste no puede ser la misma que la del cliente."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if sentido == 'debito_cliente':
+            debito_sub_cuenta  = cliente_actual.sub_cuenta
+            credito_sub_cuenta = ajuste.sub_cuenta
+            ajuste.debito,  ajuste.credito = monto, Decimal('0')
+        else:
+            debito_sub_cuenta  = ajuste.sub_cuenta
+            credito_sub_cuenta = cliente_actual.sub_cuenta
+            ajuste.debito,  ajuste.credito = Decimal('0'), monto
+
+        try:
+            with transaction.atomic():
+                revertir_asiento(ajuste.asiento_id)
+                ajuste.save()
+                asiento_id = registrar_asiento(
+                    fecha=ajuste.fecha,
+                    debito_sub_cuenta=debito_sub_cuenta,
+                    credito_sub_cuenta=credito_sub_cuenta,
+                    valor=monto,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=ajuste.id,
+                    descripcion=_descripcion_asiento(ajuste),
+                    usuario=request.user,
+                )
+                AjusteDeSaldo.objects.filter(pk=ajuste.pk).update(asiento_id=asiento_id)
+                ajuste.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_ajuste_de_saldo(ajuste), status=status.HTTP_200_OK)
 
@@ -260,10 +440,14 @@ def update_ajuste_de_saldo(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('ajuste_saldo', 'delete')])
 def delete_ajuste_de_saldo(request, pk):
-    """Eliminar un ajuste de saldo (soft delete)"""
+    """Eliminar un ajuste de saldo (soft delete) y revertir su asiento."""
     try:
         ajuste = get_object_or_404(AjusteDeSaldo.objects, pk=pk)
-        ajuste.soft_delete()
+        with transaction.atomic():
+            revertir_asiento(ajuste.asiento_id)
+            AjusteDeSaldo.objects.filter(pk=ajuste.pk).update(asiento_id=None)
+            ajuste.refresh_from_db(fields=['asiento_id'])
+            ajuste.soft_delete()
         return Response(
             {"message": "Ajuste de saldo eliminado correctamente"},
             status=status.HTTP_200_OK
@@ -278,15 +462,58 @@ def delete_ajuste_de_saldo(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('ajuste_saldo', 'delete')])
 def restore_ajuste_de_saldo(request, pk):
-    """Restaurar un ajuste de saldo eliminado"""
+    """Restaurar un ajuste de saldo eliminado y volver a registrar el asiento."""
     try:
-        ajuste = get_object_or_404(AjusteDeSaldo.objects, pk=pk)
+        ajuste = get_object_or_404(
+            AjusteDeSaldo.objects.select_related('cliente__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
         if not ajuste.is_deleted:
             return Response(
                 {"error": "El ajuste de saldo no está eliminado"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        ajuste.restore()
+
+        cliente = ajuste.cliente
+        if cliente.sub_cuenta_id is None or cliente.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if ajuste.sub_cuenta_id == cliente.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del ajuste no puede ser la misma que la del cliente."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if ajuste.debito > 0 and ajuste.credito == 0:
+            debito_sub_cuenta, credito_sub_cuenta, monto = cliente.sub_cuenta, ajuste.sub_cuenta, ajuste.debito
+        elif ajuste.credito > 0 and ajuste.debito == 0:
+            debito_sub_cuenta, credito_sub_cuenta, monto = ajuste.sub_cuenta, cliente.sub_cuenta, ajuste.credito
+        else:
+            return Response(
+                {"error": "El ajuste no tiene una direccion contable valida; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                ajuste.restore()
+                asiento_id = registrar_asiento(
+                    fecha=ajuste.fecha,
+                    debito_sub_cuenta=debito_sub_cuenta,
+                    credito_sub_cuenta=credito_sub_cuenta,
+                    valor=monto,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=ajuste.id,
+                    descripcion=_descripcion_asiento(ajuste),
+                    usuario=request.user,
+                )
+                AjusteDeSaldo.objects.filter(pk=ajuste.pk).update(asiento_id=asiento_id)
+                ajuste.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         return Response(serialize_ajuste_de_saldo(ajuste), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -298,10 +525,12 @@ def restore_ajuste_de_saldo(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('ajuste_saldo', 'delete')])
 def hard_delete_ajuste_de_saldo(request, pk):
-    """Eliminar permanentemente un ajuste de saldo"""
+    """Eliminar permanentemente un ajuste de saldo (revierte el asiento si seguia activo)."""
     try:
         ajuste = get_object_or_404(AjusteDeSaldo.objects, pk=pk)
-        ajuste.delete()
+        with transaction.atomic():
+            revertir_asiento(ajuste.asiento_id)
+            ajuste.delete()
         return Response(
             {"message": "Ajuste de saldo eliminado permanentemente"},
             status=status.HTTP_204_NO_CONTENT

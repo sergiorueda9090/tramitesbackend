@@ -4,8 +4,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Q
+from django.core.exceptions import ValidationError
 from datetime import datetime
 from decimal import Decimal
 
@@ -13,11 +14,23 @@ from ..models import CargoNoRegistrado
 from tarjetas.models import Tarjeta
 from clientes.models import Cliente
 from sub_cuentas.models import SubCuenta
+from movimiento_contable.services import registrar_asiento, revertir_asiento
 from .permissions import RolePermission, ModulePermission
 
 
+MODULO_ORIGEN = 'cargos_no_registrados'
+
+
+def _descripcion_asiento(cargo):
+    return (
+        f"Cargo no registrado #{cargo.id} | "
+        f"Cliente: {cargo.cliente.nombre} | "
+        f"Tarjeta: {cargo.tarjeta.numero}"
+    )
+
+
 def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
-    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla."""
+    """Valida sub_cuenta obligatoria + no eliminada."""
     if not sub_cuenta_id:
         return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
     try:
@@ -26,14 +39,6 @@ def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
         return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
     if sub.is_deleted:
         return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
-    qs = CargoNoRegistrado.objects.filter(sub_cuenta_id=sub.pk)
-    if excluir_pk is not None:
-        qs = qs.exclude(pk=excluir_pk)
-    if qs.exists():
-        return None, Response(
-            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otro Cargo No Registrado."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
     return sub, None
 
 
@@ -70,6 +75,7 @@ def serialize_cargo_no_registrado(cargo):
         'sub_cuenta': cargo.sub_cuenta_id,
         'sub_cuenta_codigo': cargo.sub_cuenta.codigo if cargo.sub_cuenta else None,
         'sub_cuenta_nombre': cargo.sub_cuenta.nombre_sub_cuenta if cargo.sub_cuenta else None,
+        'asiento_id': str(cargo.asiento_id) if cargo.asiento_id else None,
         'observacion': cargo.observacion,
         'fecha': cargo.fecha,
         'created_at': cargo.created_at,
@@ -81,7 +87,15 @@ def serialize_cargo_no_registrado(cargo):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cargos_no_registrados', 'create')])
 def create_cargo_no_registrado(request):
-    """Crear un nuevo cargo no registrado"""
+    """Crear un nuevo cargo no registrado + asiento contable (partida doble).
+
+    Un cargo no registrado representa una deuda que aumenta para el cliente.
+
+    Asiento:
+      - Debito  -> cliente.sub_cuenta  (cuenta por cobrar del cliente sube).
+      - Credito -> cargo.sub_cuenta    (contraparte del cargo, ej. ingresos).
+      - Valor   -> cargo.total         (valor + 4x1000).
+    """
     try:
         required_fields = ['cliente', 'tarjeta', 'valor', 'fecha']
         for field in required_fields:
@@ -91,17 +105,15 @@ def create_cargo_no_registrado(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # Validar que el usuario exista
         if not request.user or not request.user.is_authenticated:
             return Response(
                 {"error": "Usuario no autenticado."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Validar que el cliente exista
         cliente_id = request.data.get('cliente')
         try:
-            cliente = Cliente.objects.get(pk=cliente_id)
+            cliente = Cliente.objects.select_related('sub_cuenta').get(pk=cliente_id)
             if cliente.deleted_at is not None:
                 return Response(
                     {"error": "El cliente especificado está eliminado."},
@@ -113,7 +125,12 @@ def create_cargo_no_registrado(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Validar que la tarjeta exista
+        if cliente.sub_cuenta_id is None or cliente.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         tarjeta_id = request.data.get('tarjeta')
         try:
             tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
@@ -129,26 +146,55 @@ def create_cargo_no_registrado(request):
             )
 
         valor = Decimal(request.data.get('valor'))
+        if valor <= 0:
+            return Response(
+                {"error": "El valor del cargo debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
-        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        sub_cuenta_credito, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
         if error_response:
             return error_response
 
-        cargo = CargoNoRegistrado.objects.create(
-            usuario=request.user,
-            cliente=cliente,
-            tarjeta=tarjeta,
-            valor=valor,
-            cuatro_por_mil=cuatro_por_mil,
-            total=total,
-            debito=Decimal(str(request.data.get('debito', 0) or 0)),
-            credito=Decimal(str(request.data.get('credito', 0) or 0)),
-            sub_cuenta=sub_cuenta,
-            observacion=request.data.get('observacion', ''),
-            fecha=request.data.get('fecha'),
-        )
+        if sub_cuenta_credito.pk == cliente.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del cargo (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                cargo = CargoNoRegistrado.objects.create(
+                    usuario=request.user,
+                    cliente=cliente,
+                    tarjeta=tarjeta,
+                    valor=valor,
+                    cuatro_por_mil=cuatro_por_mil,
+                    total=total,
+                    debito=total,
+                    credito=total,
+                    sub_cuenta=sub_cuenta_credito,
+                    observacion=request.data.get('observacion', ''),
+                    fecha=request.data.get('fecha'),
+                )
+
+                asiento_id = registrar_asiento(
+                    fecha=cargo.fecha,
+                    debito_sub_cuenta=cliente.sub_cuenta,
+                    credito_sub_cuenta=sub_cuenta_credito,
+                    valor=total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=cargo.id,
+                    descripcion=_descripcion_asiento(cargo),
+                    usuario=request.user,
+                )
+                CargoNoRegistrado.objects.filter(pk=cargo.pk).update(asiento_id=asiento_id)
+                cargo.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_cargo_no_registrado(cargo), status=status.HTTP_201_CREATED)
 
@@ -296,15 +342,19 @@ def get_cargo_no_registrado(request, pk):
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cargos_no_registrados', 'edit')])
 def update_cargo_no_registrado(request, pk):
-    """Actualizar un cargo no registrado"""
-    try:
-        cargo = get_object_or_404(CargoNoRegistrado.objects.select_related('tarjeta'), pk=pk)
+    """Actualizar un cargo no registrado.
 
-        # Validar que el cliente exista si se proporciona
+    Cualquier cambio revierte el asiento previo y registra uno nuevo (atomico).
+    """
+    try:
+        cargo = get_object_or_404(
+            CargoNoRegistrado.objects.select_related('tarjeta', 'cliente', 'sub_cuenta'), pk=pk
+        )
+
         if 'cliente' in request.data:
             cliente_id = request.data.get('cliente')
             try:
-                cliente = Cliente.objects.get(pk=cliente_id)
+                cliente = Cliente.objects.select_related('sub_cuenta').get(pk=cliente_id)
                 if cliente.deleted_at is not None:
                     return Response(
                         {"error": "El cliente especificado está eliminado."},
@@ -317,7 +367,6 @@ def update_cargo_no_registrado(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Validar que la tarjeta exista si se proporciona
         tarjeta = cargo.tarjeta
         if 'tarjeta' in request.data:
             tarjeta_id = request.data.get('tarjeta')
@@ -335,18 +384,60 @@ def update_cargo_no_registrado(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Actualizar otros campos
+        if 'sub_cuenta' in request.data:
+            sub_cuenta_credito, error_response = _validar_sub_cuenta(
+                request.data.get('sub_cuenta'), excluir_pk=cargo.pk
+            )
+            if error_response:
+                return error_response
+            cargo.sub_cuenta = sub_cuenta_credito
+
         cargo.valor = request.data.get('valor', cargo.valor)
         cargo.observacion = request.data.get('observacion', cargo.observacion)
         cargo.fecha = request.data.get('fecha', cargo.fecha)
 
-        # Recalcular cuatro_por_mil y total si cambió valor o tarjeta
-        if 'valor' in request.data or 'tarjeta' in request.data:
-            valor = Decimal(cargo.valor)
-            cargo.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-            cargo.total = valor + cargo.cuatro_por_mil
+        valor = Decimal(cargo.valor)
+        if valor <= 0:
+            return Response(
+                {"error": "El valor del cargo debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        cargo.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+        cargo.total = valor + cargo.cuatro_por_mil
+        cargo.debito = cargo.total
+        cargo.credito = cargo.total
 
-        cargo.save()
+        cliente_actual = cargo.cliente
+        if cliente_actual.sub_cuenta_id is None or cliente_actual.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if cargo.sub_cuenta_id == cliente_actual.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del cargo (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                revertir_asiento(cargo.asiento_id)
+                cargo.save()
+                asiento_id = registrar_asiento(
+                    fecha=cargo.fecha,
+                    debito_sub_cuenta=cliente_actual.sub_cuenta,
+                    credito_sub_cuenta=cargo.sub_cuenta,
+                    valor=cargo.total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=cargo.id,
+                    descripcion=_descripcion_asiento(cargo),
+                    usuario=request.user,
+                )
+                CargoNoRegistrado.objects.filter(pk=cargo.pk).update(asiento_id=asiento_id)
+                cargo.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_cargo_no_registrado(cargo), status=status.HTTP_200_OK)
 
@@ -365,10 +456,14 @@ def update_cargo_no_registrado(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cargos_no_registrados', 'delete')])
 def delete_cargo_no_registrado(request, pk):
-    """Eliminar un cargo no registrado (soft delete)"""
+    """Eliminar un cargo no registrado (soft delete) y revertir su asiento contable."""
     try:
         cargo = get_object_or_404(CargoNoRegistrado.objects, pk=pk)
-        cargo.soft_delete()
+        with transaction.atomic():
+            revertir_asiento(cargo.asiento_id)
+            CargoNoRegistrado.objects.filter(pk=cargo.pk).update(asiento_id=None)
+            cargo.refresh_from_db(fields=['asiento_id'])
+            cargo.soft_delete()
         return Response(
             {"message": "Cargo no registrado eliminado correctamente"},
             status=status.HTTP_200_OK
@@ -383,15 +478,48 @@ def delete_cargo_no_registrado(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cargos_no_registrados', 'delete')])
 def restore_cargo_no_registrado(request, pk):
-    """Restaurar un cargo no registrado eliminado"""
+    """Restaurar un cargo no registrado eliminado y volver a registrar el asiento."""
     try:
-        cargo = get_object_or_404(CargoNoRegistrado.objects, pk=pk)
+        cargo = get_object_or_404(
+            CargoNoRegistrado.objects.select_related('cliente__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
         if not cargo.is_deleted:
             return Response(
                 {"error": "El cargo no registrado no está eliminado"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        cargo.restore()
+
+        cliente = cargo.cliente
+        if cliente.sub_cuenta_id is None or cliente.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida; no se puede restaurar el asiento."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if cargo.sub_cuenta_id == cliente.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del cargo no puede ser la misma que la del cliente; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                cargo.restore()
+                asiento_id = registrar_asiento(
+                    fecha=cargo.fecha,
+                    debito_sub_cuenta=cliente.sub_cuenta,
+                    credito_sub_cuenta=cargo.sub_cuenta,
+                    valor=cargo.total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=cargo.id,
+                    descripcion=_descripcion_asiento(cargo),
+                    usuario=request.user,
+                )
+                CargoNoRegistrado.objects.filter(pk=cargo.pk).update(asiento_id=asiento_id)
+                cargo.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         return Response(serialize_cargo_no_registrado(cargo), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -403,10 +531,12 @@ def restore_cargo_no_registrado(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cargos_no_registrados', 'delete')])
 def hard_delete_cargo_no_registrado(request, pk):
-    """Eliminar permanentemente un cargo no registrado"""
+    """Eliminar permanentemente un cargo no registrado (revierte el asiento si seguia activo)."""
     try:
         cargo = get_object_or_404(CargoNoRegistrado.objects, pk=pk)
-        cargo.delete()
+        with transaction.atomic():
+            revertir_asiento(cargo.asiento_id)
+            cargo.delete()
         return Response(
             {"message": "Cargo no registrado eliminado permanentemente"},
             status=status.HTTP_204_NO_CONTENT

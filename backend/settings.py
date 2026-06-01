@@ -38,6 +38,13 @@ else:
     ALLOWED_HOSTS = ['*'] if DEBUG else []
 
 
+# Codigo de la SubCuenta de "ingresos por utilidad de tramites" usada por la
+# signal post_save de TramiteFinalizado para registrar el asiento contable de
+# la Utilidad. Si esta vacio o la sub-cuenta no existe, la Utilidad se crea
+# sin asiento y queda pendiente para el management command de backfill.
+UTILIDADES_SUB_CUENTA_CODIGO = os.getenv('UTILIDADES_SUB_CUENTA_CODIGO', '').strip()
+
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -76,7 +83,8 @@ INSTALLED_APPS = [
     'utilidades',
     'computador_ips',
     'plan_de_cuentas',
-    'sub_cuentas'
+    'sub_cuentas',
+    'movimiento_contable',
 ]
 
 MIDDLEWARE = [

@@ -4,8 +4,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Q
+from django.core.exceptions import ValidationError
 from datetime import datetime
 from decimal import Decimal
 
@@ -13,11 +14,23 @@ from ..models import Devolucion
 from tarjetas.models import Tarjeta
 from clientes.models import Cliente
 from sub_cuentas.models import SubCuenta
+from movimiento_contable.services import registrar_asiento, revertir_asiento
 from .permissions import RolePermission, ModulePermission
 
 
+MODULO_ORIGEN = 'devoluciones'
+
+
+def _descripcion_asiento(devolucion):
+    return (
+        f"Devolucion #{devolucion.id} | "
+        f"Cliente: {devolucion.cliente.nombre} | "
+        f"Tarjeta: {devolucion.tarjeta.numero}"
+    )
+
+
 def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
-    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla."""
+    """Valida sub_cuenta obligatoria + no eliminada."""
     if not sub_cuenta_id:
         return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
     try:
@@ -26,14 +39,6 @@ def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
         return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
     if sub.is_deleted:
         return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
-    qs = Devolucion.objects.filter(sub_cuenta_id=sub.pk)
-    if excluir_pk is not None:
-        qs = qs.exclude(pk=excluir_pk)
-    if qs.exists():
-        return None, Response(
-            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otra Devolucion."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
     return sub, None
 
 
@@ -70,6 +75,7 @@ def serialize_devolucion(devolucion):
         'sub_cuenta': devolucion.sub_cuenta_id,
         'sub_cuenta_codigo': devolucion.sub_cuenta.codigo if devolucion.sub_cuenta else None,
         'sub_cuenta_nombre': devolucion.sub_cuenta.nombre_sub_cuenta if devolucion.sub_cuenta else None,
+        'asiento_id': str(devolucion.asiento_id) if devolucion.asiento_id else None,
         'observacion': devolucion.observacion,
         'fecha': devolucion.fecha,
         'created_at': devolucion.created_at,
@@ -81,7 +87,16 @@ def serialize_devolucion(devolucion):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('devoluciones', 'create')])
 def create_devolucion(request):
-    """Crear una nueva devolución"""
+    """Crear una nueva devolución + asiento contable (partida doble).
+
+    Una devolucion es la operacion espejo de una recepcion de pago: sale plata
+    del banco y aumenta la cuenta por cobrar del cliente.
+
+    Asiento (las sub-cuentas se derivan automaticamente, no se envian en el payload):
+      - Debito  -> cliente.sub_cuenta     (cuenta por cobrar del cliente sube).
+      - Credito -> tarjeta.sub_cuenta     (caja/banco baja).
+      - Valor   -> devolucion.total       (valor + 4x1000).
+    """
     try:
         required_fields = ['cliente', 'tarjeta', 'valor', 'fecha']
         for field in required_fields:
@@ -91,17 +106,15 @@ def create_devolucion(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # Validar que el usuario exista
         if not request.user or not request.user.is_authenticated:
             return Response(
                 {"error": "Usuario no autenticado."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Validar que el cliente exista
         cliente_id = request.data.get('cliente')
         try:
-            cliente = Cliente.objects.get(pk=cliente_id)
+            cliente = Cliente.objects.select_related('sub_cuenta').get(pk=cliente_id)
             if cliente.deleted_at is not None:
                 return Response(
                     {"error": "El cliente especificado está eliminado."},
@@ -113,10 +126,15 @@ def create_devolucion(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Validar que la tarjeta exista
+        if cliente.sub_cuenta_id is None or cliente.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         tarjeta_id = request.data.get('tarjeta')
         try:
-            tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+            tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
             if tarjeta.deleted_at is not None:
                 return Response(
                     {"error": "La tarjeta especificada está eliminada."},
@@ -128,27 +146,61 @@ def create_devolucion(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if tarjeta.sub_cuenta_id == cliente.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de la tarjeta (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         valor = Decimal(request.data.get('valor'))
+        if valor <= 0:
+            return Response(
+                {"error": "El valor de la devolucion debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
-        sub_cuenta, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
-        if error_response:
-            return error_response
+        # La sub-cuenta de la devolucion se deriva siempre de la tarjeta.
+        sub_cuenta_credito = tarjeta.sub_cuenta
 
-        devolucion = Devolucion.objects.create(
-            usuario=request.user,
-            cliente=cliente,
-            tarjeta=tarjeta,
-            valor=valor,
-            cuatro_por_mil=cuatro_por_mil,
-            total=total,
-            debito=Decimal(str(request.data.get('debito', 0) or 0)),
-            credito=Decimal(str(request.data.get('credito', 0) or 0)),
-            sub_cuenta=sub_cuenta,
-            observacion=request.data.get('observacion', ''),
-            fecha=request.data.get('fecha'),
-        )
+        try:
+            with transaction.atomic():
+                devolucion = Devolucion.objects.create(
+                    usuario=request.user,
+                    cliente=cliente,
+                    tarjeta=tarjeta,
+                    valor=valor,
+                    cuatro_por_mil=cuatro_por_mil,
+                    total=total,
+                    debito=total,
+                    credito=total,
+                    sub_cuenta=sub_cuenta_credito,
+                    observacion=request.data.get('observacion', ''),
+                    fecha=request.data.get('fecha'),
+                )
+
+                asiento_id = registrar_asiento(
+                    fecha=devolucion.fecha,
+                    debito_sub_cuenta=cliente.sub_cuenta,
+                    credito_sub_cuenta=sub_cuenta_credito,
+                    valor=total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=devolucion.id,
+                    descripcion=_descripcion_asiento(devolucion),
+                    usuario=request.user,
+                )
+                Devolucion.objects.filter(pk=devolucion.pk).update(asiento_id=asiento_id)
+                devolucion.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_devolucion(devolucion), status=status.HTTP_201_CREATED)
 
@@ -296,15 +348,25 @@ def get_devolucion(request, pk):
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('devoluciones', 'edit')])
 def update_devolucion(request, pk):
-    """Actualizar una devolución"""
-    try:
-        devolucion = get_object_or_404(Devolucion.objects.select_related('tarjeta'), pk=pk)
+    """Actualizar una devolución.
 
-        # Validar que el cliente exista si se proporciona
+    Las sub-cuentas se derivan automaticamente:
+      - cliente.sub_cuenta -> lado debito.
+      - tarjeta.sub_cuenta -> lado credito (se copia tambien a devolucion.sub_cuenta).
+    No se aceptan en el payload `sub_cuenta`, `debito` ni `credito`.
+
+    Cualquier cambio revierte el asiento previo y registra uno nuevo
+    dentro de una transaccion atomica.
+    """
+    try:
+        devolucion = get_object_or_404(
+            Devolucion.objects.select_related('tarjeta__sub_cuenta', 'cliente__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
+
         if 'cliente' in request.data:
             cliente_id = request.data.get('cliente')
             try:
-                cliente = Cliente.objects.get(pk=cliente_id)
+                cliente = Cliente.objects.select_related('sub_cuenta').get(pk=cliente_id)
                 if cliente.deleted_at is not None:
                     return Response(
                         {"error": "El cliente especificado está eliminado."},
@@ -317,12 +379,11 @@ def update_devolucion(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Validar que la tarjeta exista si se proporciona
         tarjeta = devolucion.tarjeta
         if 'tarjeta' in request.data:
             tarjeta_id = request.data.get('tarjeta')
             try:
-                tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+                tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
                 if tarjeta.deleted_at is not None:
                     return Response(
                         {"error": "La tarjeta especificada está eliminada."},
@@ -335,18 +396,60 @@ def update_devolucion(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Actualizar otros campos
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # Sincronizar siempre la sub_cuenta de la devolucion con la de la tarjeta.
+        devolucion.sub_cuenta = tarjeta.sub_cuenta
+
         devolucion.valor = request.data.get('valor', devolucion.valor)
         devolucion.observacion = request.data.get('observacion', devolucion.observacion)
         devolucion.fecha = request.data.get('fecha', devolucion.fecha)
 
-        # Recalcular cuatro_por_mil y total si cambió valor o tarjeta
-        if 'valor' in request.data or 'tarjeta' in request.data:
-            valor = Decimal(devolucion.valor)
-            devolucion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-            devolucion.total = valor + devolucion.cuatro_por_mil
+        valor = Decimal(devolucion.valor)
+        if valor <= 0:
+            return Response(
+                {"error": "El valor de la devolucion debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        devolucion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+        devolucion.total = valor + devolucion.cuatro_por_mil
+        devolucion.debito = devolucion.total
+        devolucion.credito = devolucion.total
 
-        devolucion.save()
+        cliente_actual = devolucion.cliente
+        if cliente_actual.sub_cuenta_id is None or cliente_actual.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if devolucion.sub_cuenta_id == cliente_actual.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de la tarjeta (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                revertir_asiento(devolucion.asiento_id)
+                devolucion.save()
+                asiento_id = registrar_asiento(
+                    fecha=devolucion.fecha,
+                    debito_sub_cuenta=cliente_actual.sub_cuenta,
+                    credito_sub_cuenta=devolucion.sub_cuenta,
+                    valor=devolucion.total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=devolucion.id,
+                    descripcion=_descripcion_asiento(devolucion),
+                    usuario=request.user,
+                )
+                Devolucion.objects.filter(pk=devolucion.pk).update(asiento_id=asiento_id)
+                devolucion.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_devolucion(devolucion), status=status.HTTP_200_OK)
 
@@ -365,10 +468,14 @@ def update_devolucion(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('devoluciones', 'delete')])
 def delete_devolucion(request, pk):
-    """Eliminar una devolución (soft delete)"""
+    """Eliminar una devolución (soft delete) y revertir su asiento contable."""
     try:
         devolucion = get_object_or_404(Devolucion.objects, pk=pk)
-        devolucion.soft_delete()
+        with transaction.atomic():
+            revertir_asiento(devolucion.asiento_id)
+            Devolucion.objects.filter(pk=devolucion.pk).update(asiento_id=None)
+            devolucion.refresh_from_db(fields=['asiento_id'])
+            devolucion.soft_delete()
         return Response(
             {"message": "Devolución eliminada correctamente"},
             status=status.HTTP_200_OK
@@ -383,15 +490,48 @@ def delete_devolucion(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('devoluciones', 'delete')])
 def restore_devolucion(request, pk):
-    """Restaurar una devolución eliminada"""
+    """Restaurar una devolución eliminada y volver a registrar el asiento contable."""
     try:
-        devolucion = get_object_or_404(Devolucion.objects, pk=pk)
+        devolucion = get_object_or_404(
+            Devolucion.objects.select_related('cliente__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
         if not devolucion.is_deleted:
             return Response(
                 {"error": "La devolución no está eliminada"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        devolucion.restore()
+
+        cliente = devolucion.cliente
+        if cliente.sub_cuenta_id is None or cliente.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "El cliente no tiene una sub-cuenta contable valida; no se puede restaurar el asiento."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if devolucion.sub_cuenta_id == cliente.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de credito no puede ser la misma que la del cliente; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                devolucion.restore()
+                asiento_id = registrar_asiento(
+                    fecha=devolucion.fecha,
+                    debito_sub_cuenta=cliente.sub_cuenta,
+                    credito_sub_cuenta=devolucion.sub_cuenta,
+                    valor=devolucion.total,
+                    modulo_origen=MODULO_ORIGEN,
+                    origen_id=devolucion.id,
+                    descripcion=_descripcion_asiento(devolucion),
+                    usuario=request.user,
+                )
+                Devolucion.objects.filter(pk=devolucion.pk).update(asiento_id=asiento_id)
+                devolucion.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         return Response(serialize_devolucion(devolucion), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -403,10 +543,12 @@ def restore_devolucion(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('devoluciones', 'delete')])
 def hard_delete_devolucion(request, pk):
-    """Eliminar permanentemente una devolución"""
+    """Eliminar permanentemente una devolución (revierte el asiento si seguia activo)."""
     try:
         devolucion = get_object_or_404(Devolucion.objects, pk=pk)
-        devolucion.delete()
+        with transaction.atomic():
+            revertir_asiento(devolucion.asiento_id)
+            devolucion.delete()
         return Response(
             {"message": "Devolución eliminada permanentemente"},
             status=status.HTTP_204_NO_CONTENT

@@ -4,8 +4,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Q
+from django.core.exceptions import ValidationError
 from datetime import datetime
 from decimal import Decimal
 
@@ -13,11 +14,23 @@ from ..models import Gasto, GastoRelacion
 from gastos_categoria.models import GastoCategoria
 from tarjetas.models import Tarjeta
 from sub_cuentas.models import SubCuenta
+from movimiento_contable.services import registrar_asiento, revertir_asiento
 from .permissions import RolePermission, ModulePermission
 
 
+MODULO_ORIGEN_RELACION = 'gastos'
+
+
+def _descripcion_asiento_relacion(relacion):
+    return (
+        f"Gasto #{relacion.id} | "
+        f"Categoria: {relacion.gasto.nombre} | "
+        f"Tarjeta: {relacion.tarjeta.numero}"
+    )
+
+
 def _validar_sub_cuenta_gasto_relacion(sub_cuenta_id, excluir_pk=None):
-    """Valida sub_cuenta obligatoria + no eliminada + UNIQUE intra-tabla para GastoRelacion."""
+    """Valida sub_cuenta obligatoria + no eliminada."""
     if not sub_cuenta_id:
         return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
     try:
@@ -26,14 +39,6 @@ def _validar_sub_cuenta_gasto_relacion(sub_cuenta_id, excluir_pk=None):
         return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
     if sub.is_deleted:
         return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
-    qs = GastoRelacion.objects.filter(sub_cuenta_id=sub.pk)
-    if excluir_pk is not None:
-        qs = qs.exclude(pk=excluir_pk)
-    if qs.exists():
-        return None, Response(
-            {"error": f"La sub-cuenta {sub.codigo} ya esta asociada a otra Relacion de Gasto."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
     return sub, None
 
 
@@ -339,6 +344,7 @@ def serialize_gasto_relacion(relacion):
         'sub_cuenta': relacion.sub_cuenta_id,
         'sub_cuenta_codigo': relacion.sub_cuenta.codigo if relacion.sub_cuenta else None,
         'sub_cuenta_nombre': relacion.sub_cuenta.nombre_sub_cuenta if relacion.sub_cuenta else None,
+        'asiento_id': str(relacion.asiento_id) if relacion.asiento_id else None,
         'observacion': relacion.observacion,
         'fecha': relacion.fecha,
         'created_at': relacion.created_at,
@@ -350,7 +356,13 @@ def serialize_gasto_relacion(relacion):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('gastos', 'create')])
 def create_gasto_relacion(request):
-    """Crear una nueva relación de gasto"""
+    """Crear una nueva relación de gasto + asiento contable (partida doble).
+
+    Asiento:
+      - Debito  -> gasto_categoria.sub_cuenta  (cuenta de gasto del PUC sube).
+      - Credito -> relacion.sub_cuenta         (medio de pago baja).
+      - Valor   -> relacion.total              (valor + 4x1000).
+    """
     try:
         required_fields = ['gasto', 'tarjeta', 'valor', 'fecha']
         for field in required_fields:
@@ -366,10 +378,9 @@ def create_gasto_relacion(request):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Validar que la categoría exista
         gasto_id = request.data.get('gasto')
         try:
-            gasto = GastoCategoria.objects.get(pk=gasto_id)
+            gasto = GastoCategoria.objects.select_related('sub_cuenta').get(pk=gasto_id)
             if gasto.deleted_at is not None:
                 return Response(
                     {"error": "La categoría especificada está eliminada."},
@@ -381,7 +392,12 @@ def create_gasto_relacion(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Validar que la tarjeta exista
+        if gasto.sub_cuenta_id is None or gasto.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La categoria del gasto no tiene una sub-cuenta contable valida."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         tarjeta_id = request.data.get('tarjeta')
         try:
             tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
@@ -397,26 +413,55 @@ def create_gasto_relacion(request):
             )
 
         valor = Decimal(request.data.get('valor'))
+        if valor <= 0:
+            return Response(
+                {"error": "El valor del gasto debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
-        sub_cuenta, error_response = _validar_sub_cuenta_gasto_relacion(request.data.get('sub_cuenta'))
+        sub_cuenta_credito, error_response = _validar_sub_cuenta_gasto_relacion(request.data.get('sub_cuenta'))
         if error_response:
             return error_response
 
-        relacion = GastoRelacion.objects.create(
-            usuario=request.user,
-            gasto=gasto,
-            tarjeta=tarjeta,
-            valor=valor,
-            cuatro_por_mil=cuatro_por_mil,
-            total=total,
-            debito=Decimal(str(request.data.get('debito', 0) or 0)),
-            credito=Decimal(str(request.data.get('credito', 0) or 0)),
-            sub_cuenta=sub_cuenta,
-            observacion=request.data.get('observacion', ''),
-            fecha=request.data.get('fecha'),
-        )
+        if sub_cuenta_credito.pk == gasto.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del gasto (credito) no puede ser la misma que la sub-cuenta de la categoria (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                relacion = GastoRelacion.objects.create(
+                    usuario=request.user,
+                    gasto=gasto,
+                    tarjeta=tarjeta,
+                    valor=valor,
+                    cuatro_por_mil=cuatro_por_mil,
+                    total=total,
+                    debito=total,
+                    credito=total,
+                    sub_cuenta=sub_cuenta_credito,
+                    observacion=request.data.get('observacion', ''),
+                    fecha=request.data.get('fecha'),
+                )
+
+                asiento_id = registrar_asiento(
+                    fecha=relacion.fecha,
+                    debito_sub_cuenta=gasto.sub_cuenta,
+                    credito_sub_cuenta=sub_cuenta_credito,
+                    valor=total,
+                    modulo_origen=MODULO_ORIGEN_RELACION,
+                    origen_id=relacion.id,
+                    descripcion=_descripcion_asiento_relacion(relacion),
+                    usuario=request.user,
+                )
+                GastoRelacion.objects.filter(pk=relacion.pk).update(asiento_id=asiento_id)
+                relacion.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_gasto_relacion(relacion), status=status.HTTP_201_CREATED)
 
@@ -564,15 +609,19 @@ def get_gasto_relacion(request, pk):
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('gastos', 'edit')])
 def update_gasto_relacion(request, pk):
-    """Actualizar una relación de gasto"""
-    try:
-        relacion = get_object_or_404(GastoRelacion.objects.select_related('tarjeta'), pk=pk)
+    """Actualizar una relación de gasto.
 
-        # Validar que la categoría exista si se proporciona
+    Cualquier cambio revierte el asiento previo y registra uno nuevo (atomico).
+    """
+    try:
+        relacion = get_object_or_404(
+            GastoRelacion.objects.select_related('tarjeta', 'gasto__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
+
         if 'gasto' in request.data:
             gasto_id = request.data.get('gasto')
             try:
-                gasto = GastoCategoria.objects.get(pk=gasto_id)
+                gasto = GastoCategoria.objects.select_related('sub_cuenta').get(pk=gasto_id)
                 if gasto.deleted_at is not None:
                     return Response(
                         {"error": "La categoría especificada está eliminada."},
@@ -585,7 +634,6 @@ def update_gasto_relacion(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Validar que la tarjeta exista si se proporciona
         tarjeta = relacion.tarjeta
         if 'tarjeta' in request.data:
             tarjeta_id = request.data.get('tarjeta')
@@ -603,18 +651,60 @@ def update_gasto_relacion(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        # Actualizar otros campos
+        if 'sub_cuenta' in request.data:
+            sub_cuenta_credito, error_response = _validar_sub_cuenta_gasto_relacion(
+                request.data.get('sub_cuenta'), excluir_pk=relacion.pk
+            )
+            if error_response:
+                return error_response
+            relacion.sub_cuenta = sub_cuenta_credito
+
         relacion.valor = request.data.get('valor', relacion.valor)
         relacion.observacion = request.data.get('observacion', relacion.observacion)
         relacion.fecha = request.data.get('fecha', relacion.fecha)
 
-        # Recalcular cuatro_por_mil y total si cambió valor o tarjeta
-        if 'valor' in request.data or 'tarjeta' in request.data:
-            valor = Decimal(relacion.valor)
-            relacion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-            relacion.total = valor + relacion.cuatro_por_mil
+        valor = Decimal(relacion.valor)
+        if valor <= 0:
+            return Response(
+                {"error": "El valor del gasto debe ser mayor a 0."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        relacion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+        relacion.total = valor + relacion.cuatro_por_mil
+        relacion.debito = relacion.total
+        relacion.credito = relacion.total
 
-        relacion.save()
+        gasto_actual = relacion.gasto
+        if gasto_actual.sub_cuenta_id is None or gasto_actual.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La categoria del gasto no tiene una sub-cuenta contable valida."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if relacion.sub_cuenta_id == gasto_actual.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del gasto (credito) no puede ser la misma que la sub-cuenta de la categoria (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                revertir_asiento(relacion.asiento_id)
+                relacion.save()
+                asiento_id = registrar_asiento(
+                    fecha=relacion.fecha,
+                    debito_sub_cuenta=gasto_actual.sub_cuenta,
+                    credito_sub_cuenta=relacion.sub_cuenta,
+                    valor=relacion.total,
+                    modulo_origen=MODULO_ORIGEN_RELACION,
+                    origen_id=relacion.id,
+                    descripcion=_descripcion_asiento_relacion(relacion),
+                    usuario=request.user,
+                )
+                GastoRelacion.objects.filter(pk=relacion.pk).update(asiento_id=asiento_id)
+                relacion.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serialize_gasto_relacion(relacion), status=status.HTTP_200_OK)
 
@@ -633,10 +723,14 @@ def update_gasto_relacion(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def delete_gasto_relacion(request, pk):
-    """Eliminar una relación de gasto (soft delete)"""
+    """Eliminar una relación de gasto (soft delete) y revertir su asiento contable."""
     try:
         relacion = get_object_or_404(GastoRelacion.objects, pk=pk)
-        relacion.soft_delete()
+        with transaction.atomic():
+            revertir_asiento(relacion.asiento_id)
+            GastoRelacion.objects.filter(pk=relacion.pk).update(asiento_id=None)
+            relacion.refresh_from_db(fields=['asiento_id'])
+            relacion.soft_delete()
         return Response(
             {"message": "Relación de gasto eliminada correctamente"},
             status=status.HTTP_200_OK
@@ -651,15 +745,48 @@ def delete_gasto_relacion(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def restore_gasto_relacion(request, pk):
-    """Restaurar una relación de gasto eliminada"""
+    """Restaurar una relación de gasto eliminada y volver a registrar el asiento."""
     try:
-        relacion = get_object_or_404(GastoRelacion.objects, pk=pk)
+        relacion = get_object_or_404(
+            GastoRelacion.objects.select_related('gasto__sub_cuenta', 'sub_cuenta'), pk=pk
+        )
         if not relacion.is_deleted:
             return Response(
                 {"error": "La relación de gasto no está eliminada"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        relacion.restore()
+
+        gasto = relacion.gasto
+        if gasto.sub_cuenta_id is None or gasto.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La categoria del gasto no tiene una sub-cuenta contable valida; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if relacion.sub_cuenta_id == gasto.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta del gasto no puede ser la misma que la de la categoria; no se puede restaurar."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                relacion.restore()
+                asiento_id = registrar_asiento(
+                    fecha=relacion.fecha,
+                    debito_sub_cuenta=gasto.sub_cuenta,
+                    credito_sub_cuenta=relacion.sub_cuenta,
+                    valor=relacion.total,
+                    modulo_origen=MODULO_ORIGEN_RELACION,
+                    origen_id=relacion.id,
+                    descripcion=_descripcion_asiento_relacion(relacion),
+                    usuario=request.user,
+                )
+                GastoRelacion.objects.filter(pk=relacion.pk).update(asiento_id=asiento_id)
+                relacion.asiento_id = asiento_id
+        except ValidationError as ve:
+            return Response({"error": str(ve.messages[0] if ve.messages else ve)},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         return Response(serialize_gasto_relacion(relacion), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -671,10 +798,12 @@ def restore_gasto_relacion(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('gastos', 'delete')])
 def hard_delete_gasto_relacion(request, pk):
-    """Eliminar permanentemente una relación de gasto"""
+    """Eliminar permanentemente una relación de gasto (revierte el asiento si seguia activo)."""
     try:
         relacion = get_object_or_404(GastoRelacion.objects, pk=pk)
-        relacion.delete()
+        with transaction.atomic():
+            revertir_asiento(relacion.asiento_id)
+            relacion.delete()
         return Response(
             {"message": "Relación de gasto eliminada permanentemente"},
             status=status.HTTP_204_NO_CONTENT
