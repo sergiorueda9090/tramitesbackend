@@ -13,7 +13,6 @@ from decimal import Decimal
 from ..models import Gasto, GastoRelacion
 from gastos_categoria.models import GastoCategoria
 from tarjetas.models import Tarjeta
-from sub_cuentas.models import SubCuenta
 from movimiento_contable.services import registrar_asiento, revertir_asiento
 from .permissions import RolePermission, ModulePermission
 
@@ -27,19 +26,6 @@ def _descripcion_asiento_relacion(relacion):
         f"Categoria: {relacion.gasto.nombre} | "
         f"Tarjeta: {relacion.tarjeta.numero}"
     )
-
-
-def _validar_sub_cuenta_gasto_relacion(sub_cuenta_id, excluir_pk=None):
-    """Valida sub_cuenta obligatoria + no eliminada."""
-    if not sub_cuenta_id:
-        return None, Response({"error": "La sub-cuenta es obligatoria."}, status=status.HTTP_400_BAD_REQUEST)
-    try:
-        sub = SubCuenta.objects.get(pk=sub_cuenta_id)
-    except SubCuenta.DoesNotExist:
-        return None, Response({"error": "La sub-cuenta especificada no existe."}, status=status.HTTP_404_NOT_FOUND)
-    if sub.is_deleted:
-        return None, Response({"error": "La sub-cuenta especificada esta eliminada."}, status=status.HTTP_400_BAD_REQUEST)
-    return sub, None
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
@@ -358,9 +344,9 @@ def serialize_gasto_relacion(relacion):
 def create_gasto_relacion(request):
     """Crear una nueva relación de gasto + asiento contable (partida doble).
 
-    Asiento:
+    Asiento (las sub-cuentas se derivan automaticamente, no se envian en el payload):
       - Debito  -> gasto_categoria.sub_cuenta  (cuenta de gasto del PUC sube).
-      - Credito -> relacion.sub_cuenta         (medio de pago baja).
+      - Credito -> tarjeta.sub_cuenta          (medio de pago baja).
       - Valor   -> relacion.total              (valor + 4x1000).
     """
     try:
@@ -400,7 +386,7 @@ def create_gasto_relacion(request):
 
         tarjeta_id = request.data.get('tarjeta')
         try:
-            tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+            tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
             if tarjeta.deleted_at is not None:
                 return Response(
                     {"error": "La tarjeta especificada está eliminada."},
@@ -412,6 +398,18 @@ def create_gasto_relacion(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if tarjeta.sub_cuenta_id == gasto.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de la tarjeta (credito) no puede ser la misma que la sub-cuenta de la categoria (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         valor = Decimal(request.data.get('valor'))
         if valor <= 0:
             return Response(
@@ -421,15 +419,8 @@ def create_gasto_relacion(request):
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
-        sub_cuenta_credito, error_response = _validar_sub_cuenta_gasto_relacion(request.data.get('sub_cuenta'))
-        if error_response:
-            return error_response
-
-        if sub_cuenta_credito.pk == gasto.sub_cuenta_id:
-            return Response(
-                {"error": "La sub-cuenta del gasto (credito) no puede ser la misma que la sub-cuenta de la categoria (debito)."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # La sub-cuenta de credito (medio de pago) se deriva siempre de la tarjeta.
+        sub_cuenta_credito = tarjeta.sub_cuenta
 
         try:
             with transaction.atomic():
@@ -615,7 +606,7 @@ def update_gasto_relacion(request, pk):
     """
     try:
         relacion = get_object_or_404(
-            GastoRelacion.objects.select_related('tarjeta', 'gasto__sub_cuenta', 'sub_cuenta'), pk=pk
+            GastoRelacion.objects.select_related('tarjeta__sub_cuenta', 'gasto__sub_cuenta', 'sub_cuenta'), pk=pk
         )
 
         if 'gasto' in request.data:
@@ -638,7 +629,7 @@ def update_gasto_relacion(request, pk):
         if 'tarjeta' in request.data:
             tarjeta_id = request.data.get('tarjeta')
             try:
-                tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+                tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
                 if tarjeta.deleted_at is not None:
                     return Response(
                         {"error": "La tarjeta especificada está eliminada."},
@@ -651,13 +642,13 @@ def update_gasto_relacion(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        if 'sub_cuenta' in request.data:
-            sub_cuenta_credito, error_response = _validar_sub_cuenta_gasto_relacion(
-                request.data.get('sub_cuenta'), excluir_pk=relacion.pk
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            if error_response:
-                return error_response
-            relacion.sub_cuenta = sub_cuenta_credito
+        # Sincronizar siempre la sub_cuenta (credito) de la relacion con la de la tarjeta.
+        relacion.sub_cuenta = tarjeta.sub_cuenta
 
         relacion.valor = request.data.get('valor', relacion.valor)
         relacion.observacion = request.data.get('observacion', relacion.observacion)

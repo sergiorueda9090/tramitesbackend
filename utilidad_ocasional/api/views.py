@@ -38,10 +38,24 @@ def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
 
 
 def calcular_cuatro_por_mil(valor, tarjeta):
-    """Calcula el cuatro por mil si la tarjeta lo tiene activo"""
+    """Calcula el cuatro por mil si la tarjeta lo tiene activo (sobre el valor dado)."""
     if tarjeta.cuatro_por_mil == '1':
         return (Decimal(valor) * Decimal('4')) / Decimal('1000')
     return Decimal('0')
+
+
+def _asiento_legs(utilidad, tarjeta):
+    """Devuelve (debito_sub_cuenta, credito_sub_cuenta, monto_positivo) segun el signo.
+
+    El valor de la utilidad puede ser positivo (ganancia) o negativo (perdida):
+      - Positivo: Debito -> tarjeta.sub_cuenta (banco sube) / Credito -> utilidad.sub_cuenta (ingreso).
+      - Negativo: se invierte -> Debito -> utilidad.sub_cuenta / Credito -> tarjeta.sub_cuenta (banco baja).
+    El asiento siempre se postea con el monto en positivo (= abs(total)).
+    """
+    monto = abs(utilidad.total)
+    if utilidad.valor > 0:
+        return tarjeta.sub_cuenta, utilidad.sub_cuenta, monto
+    return utilidad.sub_cuenta, tarjeta.sub_cuenta, monto
 
 
 def serialize_utilidad_ocasional(utilidad):
@@ -80,10 +94,11 @@ def serialize_utilidad_ocasional(utilidad):
 def create_utilidad_ocasional(request):
     """Crear una nueva utilidad ocasional + asiento contable (partida doble).
 
-    Asiento:
-      - Debito  -> tarjeta.sub_cuenta   (banco que recibe el ingreso sube).
-      - Credito -> utilidad.sub_cuenta  (cuenta de ingreso del PUC).
-      - Valor   -> utilidad.total       (valor + 4x1000).
+    El valor puede ser positivo (ganancia) o negativo (perdida).
+    Asiento (la sub-cuenta de la tarjeta se deriva; la de ingreso se envia en el payload):
+      - Positivo: Debito -> tarjeta.sub_cuenta (banco) / Credito -> utilidad.sub_cuenta (ingreso).
+      - Negativo: se invierte (Debito -> ingreso / Credito -> banco).
+      - 4x1000 se calcula sobre |valor|; el asiento se postea con el monto en positivo.
     """
     try:
         required_fields = ['tarjeta', 'valor', 'fecha']
@@ -121,13 +136,15 @@ def create_utilidad_ocasional(request):
             )
 
         valor = Decimal(request.data.get('valor'))
-        if valor <= 0:
+        if valor == 0:
             return Response(
-                {"error": "El valor de la utilidad ocasional debe ser mayor a 0."},
+                {"error": "El valor de la utilidad ocasional no puede ser 0."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-        total = valor + cuatro_por_mil
+        # El 4x1000 se calcula sobre |valor|; el total conserva el signo del valor.
+        monto_base = abs(valor)
+        cuatro_por_mil = calcular_cuatro_por_mil(monto_base, tarjeta)
+        total = (monto_base + cuatro_por_mil) if valor > 0 else -(monto_base + cuatro_por_mil)
 
         sub_cuenta_credito, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
         if error_response:
@@ -135,7 +152,7 @@ def create_utilidad_ocasional(request):
 
         if sub_cuenta_credito.pk == tarjeta.sub_cuenta_id:
             return Response(
-                {"error": "La sub-cuenta de la utilidad (credito) no puede ser la misma que la de la tarjeta (debito)."},
+                {"error": "La sub-cuenta de la utilidad no puede ser la misma que la de la tarjeta."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -154,11 +171,13 @@ def create_utilidad_ocasional(request):
                     fecha=request.data.get('fecha'),
                 )
 
+                # Direccion del asiento segun el signo (positivo=ganancia / negativo=perdida).
+                debito_sc, credito_sc, monto_asiento = _asiento_legs(utilidad, tarjeta)
                 asiento_id = registrar_asiento(
                     fecha=utilidad.fecha,
-                    debito_sub_cuenta=tarjeta.sub_cuenta,
-                    credito_sub_cuenta=sub_cuenta_credito,
-                    valor=total,
+                    debito_sub_cuenta=debito_sc,
+                    credito_sub_cuenta=credito_sc,
+                    valor=monto_asiento,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=utilidad.id,
                     descripcion=_descripcion_asiento(utilidad),
@@ -349,13 +368,15 @@ def update_utilidad_ocasional(request, pk):
         utilidad.fecha = request.data.get('fecha', utilidad.fecha)
 
         valor = Decimal(utilidad.valor)
-        if valor <= 0:
+        if valor == 0:
             return Response(
-                {"error": "El valor de la utilidad ocasional debe ser mayor a 0."},
+                {"error": "El valor de la utilidad ocasional no puede ser 0."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        utilidad.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-        utilidad.total = valor + utilidad.cuatro_por_mil
+        # El 4x1000 se calcula sobre |valor|; el total conserva el signo del valor.
+        monto_base = abs(valor)
+        utilidad.cuatro_por_mil = calcular_cuatro_por_mil(monto_base, tarjeta)
+        utilidad.total = (monto_base + utilidad.cuatro_por_mil) if valor > 0 else -(monto_base + utilidad.cuatro_por_mil)
         utilidad.debito = utilidad.total
         utilidad.credito = utilidad.total
 
@@ -374,11 +395,13 @@ def update_utilidad_ocasional(request, pk):
             with transaction.atomic():
                 revertir_asiento(utilidad.asiento_id)
                 utilidad.save()
+                # Direccion del asiento segun el signo (positivo=ganancia / negativo=perdida).
+                debito_sc, credito_sc, monto_asiento = _asiento_legs(utilidad, tarjeta)
                 asiento_id = registrar_asiento(
                     fecha=utilidad.fecha,
-                    debito_sub_cuenta=tarjeta.sub_cuenta,
-                    credito_sub_cuenta=utilidad.sub_cuenta,
-                    valor=utilidad.total,
+                    debito_sub_cuenta=debito_sc,
+                    credito_sub_cuenta=credito_sc,
+                    valor=monto_asiento,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=utilidad.id,
                     descripcion=_descripcion_asiento(utilidad),
@@ -455,11 +478,13 @@ def restore_utilidad_ocasional(request, pk):
         try:
             with transaction.atomic():
                 utilidad.restore()
+                # Direccion del asiento segun el signo (positivo=ganancia / negativo=perdida).
+                debito_sc, credito_sc, monto_asiento = _asiento_legs(utilidad, tarjeta)
                 asiento_id = registrar_asiento(
                     fecha=utilidad.fecha,
-                    debito_sub_cuenta=tarjeta.sub_cuenta,
-                    credito_sub_cuenta=utilidad.sub_cuenta,
-                    valor=utilidad.total,
+                    debito_sub_cuenta=debito_sc,
+                    credito_sub_cuenta=credito_sc,
+                    valor=monto_asiento,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=utilidad.id,
                     descripcion=_descripcion_asiento(utilidad),

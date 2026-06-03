@@ -1,7 +1,6 @@
 from django.db import models
 from django.conf import settings
 from tarjetas.models import Tarjeta
-from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
 
 
@@ -49,15 +48,6 @@ class CuatroPorMil(models.Model):
         null=True,
         related_name='cuatro_por_mil_registros',
         help_text='Usuario que registró el 4x1000'
-    )
-
-    debito  = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento débito')
-    credito = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text='Movimiento crédito')
-    sub_cuenta = models.ForeignKey(
-        SubCuenta,
-        on_delete=models.PROTECT,
-        related_name='cuatro_por_mil_registros',
-        help_text='Sub-cuenta contable de debito asociada al registro'
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
