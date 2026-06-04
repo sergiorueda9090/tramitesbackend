@@ -2,6 +2,8 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    path('config/',                 views.get_config,                       name='get_utilidad_ocasional_config'),
+    path('config/update/',          views.update_config,                    name='update_utilidad_ocasional_config'),
     path('list/',                   views.list_utilidades_ocasionales,      name='list_utilidades_ocasionales'),
     path('create/',                 views.create_utilidad_ocasional,        name='create_utilidad_ocasional'),
     path('<int:pk>/',               views.get_utilidad_ocasional,           name='get_utilidad_ocasional'),

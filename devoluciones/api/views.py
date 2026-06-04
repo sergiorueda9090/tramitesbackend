@@ -179,8 +179,11 @@ def create_devolucion(request):
                     valor=valor,
                     cuatro_por_mil=cuatro_por_mil,
                     total=total,
-                    debito=total,
-                    credito=total,
+                    # El 4x1000 NO se suma al asiento contable: debito/credito reflejan
+                    # solo el valor base. El 4x1000 queda registrado aparte (campo
+                    # cuatro_por_mil + modulo Cuatro por mil via signal).
+                    debito=valor,
+                    credito=valor,
                     sub_cuenta=sub_cuenta_credito,
                     observacion=request.data.get('observacion', ''),
                     fecha=request.data.get('fecha'),
@@ -190,7 +193,7 @@ def create_devolucion(request):
                     fecha=devolucion.fecha,
                     debito_sub_cuenta=cliente.sub_cuenta,
                     credito_sub_cuenta=sub_cuenta_credito,
-                    valor=total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=devolucion.id,
                     descripcion=_descripcion_asiento(devolucion),
@@ -416,8 +419,10 @@ def update_devolucion(request, pk):
             )
         devolucion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         devolucion.total = valor + devolucion.cuatro_por_mil
-        devolucion.debito = devolucion.total
-        devolucion.credito = devolucion.total
+        # El 4x1000 NO se suma al asiento contable: debito/credito reflejan solo el
+        # valor base. El 4x1000 queda registrado aparte (campo cuatro_por_mil).
+        devolucion.debito = valor
+        devolucion.credito = valor
 
         cliente_actual = devolucion.cliente
         if cliente_actual.sub_cuenta_id is None or cliente_actual.sub_cuenta.is_deleted:
@@ -439,7 +444,7 @@ def update_devolucion(request, pk):
                     fecha=devolucion.fecha,
                     debito_sub_cuenta=cliente_actual.sub_cuenta,
                     credito_sub_cuenta=devolucion.sub_cuenta,
-                    valor=devolucion.total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=devolucion.id,
                     descripcion=_descripcion_asiento(devolucion),
@@ -515,12 +520,15 @@ def restore_devolucion(request, pk):
 
         try:
             with transaction.atomic():
+                # El 4x1000 no entra al asiento; debito/credito reflejan solo el valor base.
+                devolucion.debito = devolucion.valor
+                devolucion.credito = devolucion.valor
                 devolucion.restore()
                 asiento_id = registrar_asiento(
                     fecha=devolucion.fecha,
                     debito_sub_cuenta=cliente.sub_cuenta,
                     credito_sub_cuenta=devolucion.sub_cuenta,
-                    valor=devolucion.total,
+                    valor=devolucion.valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=devolucion.id,
                     descripcion=_descripcion_asiento(devolucion),

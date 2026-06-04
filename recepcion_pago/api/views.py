@@ -180,8 +180,11 @@ def create_recepcion_pago(request):
                     valor=valor,
                     cuatro_por_mil=cuatro_por_mil,
                     total=total,
-                    debito=total,
-                    credito=total,
+                    # El 4x1000 NO se suma al asiento contable: debito/credito reflejan
+                    # solo el valor base. El 4x1000 queda registrado aparte (campo
+                    # cuatro_por_mil + modulo Cuatro por mil via signal).
+                    debito=valor,
+                    credito=valor,
                     sub_cuenta=sub_cuenta_debito,
                     observacion=request.data.get('observacion', ''),
                     fecha=request.data.get('fecha'),
@@ -191,7 +194,7 @@ def create_recepcion_pago(request):
                     fecha=recepcion.fecha,
                     debito_sub_cuenta=sub_cuenta_debito,
                     credito_sub_cuenta=cliente.sub_cuenta,
-                    valor=total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=recepcion.id,
                     descripcion=_descripcion_asiento(recepcion),
@@ -411,8 +414,9 @@ def update_recepcion_pago(request, pk):
             )
         recepcion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         recepcion.total = valor + recepcion.cuatro_por_mil
-        recepcion.debito = recepcion.total
-        recepcion.credito = recepcion.total
+        # El 4x1000 NO se suma al asiento: debito/credito reflejan solo el valor base.
+        recepcion.debito = valor
+        recepcion.credito = valor
 
         cliente_actual = recepcion.cliente
         if cliente_actual.sub_cuenta_id is None or cliente_actual.sub_cuenta.is_deleted:
@@ -434,7 +438,7 @@ def update_recepcion_pago(request, pk):
                     fecha=recepcion.fecha,
                     debito_sub_cuenta=recepcion.sub_cuenta,
                     credito_sub_cuenta=cliente_actual.sub_cuenta,
-                    valor=recepcion.total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=recepcion.id,
                     descripcion=_descripcion_asiento(recepcion),
@@ -510,12 +514,15 @@ def restore_recepcion_pago(request, pk):
 
         try:
             with transaction.atomic():
+                # El 4x1000 no entra al asiento; debito/credito reflejan solo el valor base.
+                recepcion.debito = recepcion.valor
+                recepcion.credito = recepcion.valor
                 recepcion.restore()
                 asiento_id = registrar_asiento(
                     fecha=recepcion.fecha,
                     debito_sub_cuenta=recepcion.sub_cuenta,
                     credito_sub_cuenta=cliente.sub_cuenta,
-                    valor=recepcion.total,
+                    valor=recepcion.valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=recepcion.id,
                     descripcion=_descripcion_asiento(recepcion),

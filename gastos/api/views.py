@@ -431,8 +431,11 @@ def create_gasto_relacion(request):
                     valor=valor,
                     cuatro_por_mil=cuatro_por_mil,
                     total=total,
-                    debito=total,
-                    credito=total,
+                    # El 4x1000 NO se suma al asiento contable: debito/credito reflejan
+                    # solo el valor base. El 4x1000 queda registrado aparte (campo
+                    # cuatro_por_mil + modulo Cuatro por mil via signal).
+                    debito=valor,
+                    credito=valor,
                     sub_cuenta=sub_cuenta_credito,
                     observacion=request.data.get('observacion', ''),
                     fecha=request.data.get('fecha'),
@@ -442,7 +445,7 @@ def create_gasto_relacion(request):
                     fecha=relacion.fecha,
                     debito_sub_cuenta=gasto.sub_cuenta,
                     credito_sub_cuenta=sub_cuenta_credito,
-                    valor=total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN_RELACION,
                     origen_id=relacion.id,
                     descripcion=_descripcion_asiento_relacion(relacion),
@@ -662,8 +665,9 @@ def update_gasto_relacion(request, pk):
             )
         relacion.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         relacion.total = valor + relacion.cuatro_por_mil
-        relacion.debito = relacion.total
-        relacion.credito = relacion.total
+        # El 4x1000 NO se suma al asiento: debito/credito reflejan solo el valor base.
+        relacion.debito = valor
+        relacion.credito = valor
 
         gasto_actual = relacion.gasto
         if gasto_actual.sub_cuenta_id is None or gasto_actual.sub_cuenta.is_deleted:
@@ -685,7 +689,7 @@ def update_gasto_relacion(request, pk):
                     fecha=relacion.fecha,
                     debito_sub_cuenta=gasto_actual.sub_cuenta,
                     credito_sub_cuenta=relacion.sub_cuenta,
-                    valor=relacion.total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN_RELACION,
                     origen_id=relacion.id,
                     descripcion=_descripcion_asiento_relacion(relacion),
@@ -761,12 +765,15 @@ def restore_gasto_relacion(request, pk):
 
         try:
             with transaction.atomic():
+                # El 4x1000 no entra al asiento; debito/credito reflejan solo el valor base.
+                relacion.debito = relacion.valor
+                relacion.credito = relacion.valor
                 relacion.restore()
                 asiento_id = registrar_asiento(
                     fecha=relacion.fecha,
                     debito_sub_cuenta=gasto.sub_cuenta,
                     credito_sub_cuenta=relacion.sub_cuenta,
-                    valor=relacion.total,
+                    valor=relacion.valor,
                     modulo_origen=MODULO_ORIGEN_RELACION,
                     origen_id=relacion.id,
                     descripcion=_descripcion_asiento_relacion(relacion),

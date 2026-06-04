@@ -1,6 +1,9 @@
+import uuid
+
 from django.db import models
 from django.conf import settings
 from tarjetas.models import Tarjeta
+from sub_cuentas.models import SubCuenta
 from simple_history.models import HistoricalRecords
 
 
@@ -50,6 +53,11 @@ class CuatroPorMil(models.Model):
         help_text='Usuario que registró el 4x1000'
     )
 
+    asiento_id = models.UUIDField(
+        null=True, blank=True, default=None, editable=False,
+        help_text='UUID del asiento contable activo en MovimientoContable (null si aun no se registro o fue revertido)'
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -86,3 +94,41 @@ class CuatroPorMil(models.Model):
     def restore(self):
         self.deleted_at = None
         self.save()
+
+
+class CuatroPorMilConfig(models.Model):
+    """Configuracion global (singleton) del modulo Cuatro por mil.
+
+    `sub_cuenta_debito` es la unica sub-cuenta configurable: todo asiento de
+    4x1000 se postea con Debito -> esta sub-cuenta y Credito -> sub-cuenta de la
+    tarjeta del registro. Solo existe un registro (pk=1); se obtiene/crea con `load()`.
+    """
+    sub_cuenta_debito = models.ForeignKey(
+        SubCuenta,
+        on_delete=models.PROTECT,
+        null=True, blank=True,
+        related_name='cuatro_por_mil_config_debito',
+        help_text='Sub-cuenta de debito por defecto para los asientos de 4x1000.'
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        db_table = 'cuatro_por_mil_config'
+        verbose_name = 'Configuracion Cuatro por mil'
+        verbose_name_plural = 'Configuracion Cuatro por mil'
+
+    def __str__(self):
+        return 'Configuracion Cuatro por mil'
+
+    def save(self, *args, **kwargs):
+        # Forzar singleton: siempre pk=1.
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

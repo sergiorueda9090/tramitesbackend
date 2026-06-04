@@ -173,8 +173,11 @@ def create_cargo_no_registrado(request):
                     valor=valor,
                     cuatro_por_mil=cuatro_por_mil,
                     total=total,
-                    debito=total,
-                    credito=total,
+                    # El 4x1000 NO se suma al asiento contable: debito/credito reflejan
+                    # solo el valor base. El 4x1000 queda registrado aparte (campo
+                    # cuatro_por_mil + modulo Cuatro por mil via signal).
+                    debito=valor,
+                    credito=valor,
                     sub_cuenta=sub_cuenta_credito,
                     observacion=request.data.get('observacion', ''),
                     fecha=request.data.get('fecha'),
@@ -184,7 +187,7 @@ def create_cargo_no_registrado(request):
                     fecha=cargo.fecha,
                     debito_sub_cuenta=cliente.sub_cuenta,
                     credito_sub_cuenta=sub_cuenta_credito,
-                    valor=total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=cargo.id,
                     descripcion=_descripcion_asiento(cargo),
@@ -404,8 +407,9 @@ def update_cargo_no_registrado(request, pk):
             )
         cargo.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         cargo.total = valor + cargo.cuatro_por_mil
-        cargo.debito = cargo.total
-        cargo.credito = cargo.total
+        # El 4x1000 NO se suma al asiento: debito/credito reflejan solo el valor base.
+        cargo.debito = valor
+        cargo.credito = valor
 
         cliente_actual = cargo.cliente
         if cliente_actual.sub_cuenta_id is None or cliente_actual.sub_cuenta.is_deleted:
@@ -427,7 +431,7 @@ def update_cargo_no_registrado(request, pk):
                     fecha=cargo.fecha,
                     debito_sub_cuenta=cliente_actual.sub_cuenta,
                     credito_sub_cuenta=cargo.sub_cuenta,
-                    valor=cargo.total,
+                    valor=valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=cargo.id,
                     descripcion=_descripcion_asiento(cargo),
@@ -503,12 +507,15 @@ def restore_cargo_no_registrado(request, pk):
 
         try:
             with transaction.atomic():
+                # El 4x1000 no entra al asiento; debito/credito reflejan solo el valor base.
+                cargo.debito = cargo.valor
+                cargo.credito = cargo.valor
                 cargo.restore()
                 asiento_id = registrar_asiento(
                     fecha=cargo.fecha,
                     debito_sub_cuenta=cliente.sub_cuenta,
                     credito_sub_cuenta=cargo.sub_cuenta,
-                    valor=cargo.total,
+                    valor=cargo.valor,
                     modulo_origen=MODULO_ORIGEN,
                     origen_id=cargo.id,
                     descripcion=_descripcion_asiento(cargo),

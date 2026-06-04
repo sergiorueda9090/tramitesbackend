@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 from datetime import datetime
 from decimal import Decimal
 
-from ..models import UtilidadOcasional
+from ..models import UtilidadOcasional, UtilidadOcasionalConfig
 from tarjetas.models import Tarjeta
 from sub_cuentas.models import SubCuenta
 from movimiento_contable.services import registrar_asiento, revertir_asiento
@@ -37,6 +37,51 @@ def _validar_sub_cuenta(sub_cuenta_id, excluir_pk=None):
     return sub, None
 
 
+def _resolver_sub_cuenta_config(tipo):
+    """Resuelve la contracuenta desde la configuracion global segun el `tipo`
+    (ganancia / perdida). Devuelve (sub_cuenta, error_response).
+
+    - ganancia -> config.sub_cuenta_positiva
+    - perdida  -> config.sub_cuenta_negativa
+    """
+    cfg = UtilidadOcasionalConfig.load()
+    if tipo == 'ganancia':
+        sub_cuenta = cfg.sub_cuenta_positiva
+        etiqueta = 'ganancia'
+    else:
+        sub_cuenta = cfg.sub_cuenta_negativa
+        etiqueta = 'perdida'
+
+    if sub_cuenta is None:
+        return None, Response(
+            {"error": f"No hay una sub-cuenta configurada para valores {etiqueta}. "
+                      f"Configurala en la pantalla de Utilidad Ocasional antes de registrar."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    if sub_cuenta.is_deleted:
+        return None, Response(
+            {"error": f"La sub-cuenta configurada para valores {etiqueta} esta eliminada. "
+                      f"Actualiza la configuracion."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    return sub_cuenta, None
+
+
+def serialize_config(cfg):
+    """Convierte la configuracion (singleton) a diccionario."""
+    pos = cfg.sub_cuenta_positiva
+    neg = cfg.sub_cuenta_negativa
+    return {
+        'sub_cuenta_positiva': cfg.sub_cuenta_positiva_id,
+        'sub_cuenta_positiva_codigo': pos.codigo if pos else None,
+        'sub_cuenta_positiva_nombre': pos.nombre_sub_cuenta if pos else None,
+        'sub_cuenta_negativa': cfg.sub_cuenta_negativa_id,
+        'sub_cuenta_negativa_codigo': neg.codigo if neg else None,
+        'sub_cuenta_negativa_nombre': neg.nombre_sub_cuenta if neg else None,
+        'updated_at': cfg.updated_at,
+    }
+
+
 def calcular_cuatro_por_mil(valor, tarjeta):
     """Calcula el cuatro por mil si la tarjeta lo tiene activo (sobre el valor dado)."""
     if tarjeta.cuatro_por_mil == '1':
@@ -45,15 +90,16 @@ def calcular_cuatro_por_mil(valor, tarjeta):
 
 
 def _asiento_legs(utilidad, tarjeta):
-    """Devuelve (debito_sub_cuenta, credito_sub_cuenta, monto_positivo) segun el signo.
+    """Devuelve (debito_sub_cuenta, credito_sub_cuenta, monto_positivo) segun el `tipo`.
 
-    El valor de la utilidad puede ser positivo (ganancia) o negativo (perdida):
-      - Positivo: Debito -> tarjeta.sub_cuenta (banco sube) / Credito -> utilidad.sub_cuenta (ingreso).
-      - Negativo: se invierte -> Debito -> utilidad.sub_cuenta / Credito -> tarjeta.sub_cuenta (banco baja).
-    El asiento siempre se postea con el monto en positivo (= abs(total)).
+    El valor siempre es positivo; el tipo indica ganancia o perdida:
+      - Ganancia: Debito -> tarjeta.sub_cuenta (banco sube) / Credito -> utilidad.sub_cuenta (ingreso).
+      - Perdida:  se invierte -> Debito -> utilidad.sub_cuenta / Credito -> tarjeta.sub_cuenta (banco baja).
+    El asiento se postea con el monto base en positivo (= valor); el 4x1000 NO se
+    suma al asiento (queda registrado aparte en el modulo Cuatro por mil).
     """
-    monto = abs(utilidad.total)
-    if utilidad.valor > 0:
+    monto = abs(utilidad.valor)
+    if utilidad.tipo == 'ganancia':
         return tarjeta.sub_cuenta, utilidad.sub_cuenta, monto
     return utilidad.sub_cuenta, tarjeta.sub_cuenta, monto
 
@@ -72,6 +118,8 @@ def serialize_utilidad_ocasional(utilidad):
             'titular': utilidad.tarjeta.titular,
             'cuatro_por_mil': utilidad.tarjeta.cuatro_por_mil,
         } if utilidad.tarjeta else None,
+        'tipo': utilidad.tipo,
+        'tipo_display': utilidad.get_tipo_display(),
         'valor': str(utilidad.valor),
         'cuatro_por_mil': str(utilidad.cuatro_por_mil),
         'total': str(utilidad.total),
@@ -94,11 +142,12 @@ def serialize_utilidad_ocasional(utilidad):
 def create_utilidad_ocasional(request):
     """Crear una nueva utilidad ocasional + asiento contable (partida doble).
 
-    El valor puede ser positivo (ganancia) o negativo (perdida).
-    Asiento (la sub-cuenta de la tarjeta se deriva; la de ingreso se envia en el payload):
-      - Positivo: Debito -> tarjeta.sub_cuenta (banco) / Credito -> utilidad.sub_cuenta (ingreso).
-      - Negativo: se invierte (Debito -> ingreso / Credito -> banco).
-      - 4x1000 se calcula sobre |valor|; el asiento se postea con el monto en positivo.
+    El valor siempre es positivo; el `tipo` (ganancia/perdida) define la direccion.
+    Asiento (la sub-cuenta de la tarjeta se deriva; la contracuenta se resuelve desde
+    la configuracion global segun el tipo):
+      - Ganancia: Debito -> tarjeta.sub_cuenta (banco) / Credito -> config.sub_cuenta_positiva (ingreso).
+      - Perdida:  se invierte (Debito -> config.sub_cuenta_negativa / Credito -> banco).
+      - 4x1000 se calcula sobre el valor; el asiento se postea con el monto en positivo.
     """
     try:
         required_fields = ['tarjeta', 'valor', 'fecha']
@@ -135,24 +184,32 @@ def create_utilidad_ocasional(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        valor = Decimal(request.data.get('valor'))
+        # El valor SIEMPRE se almacena positivo (magnitud). El tipo (ganancia/perdida)
+        # llega en el payload y reemplaza al antiguo signo del valor.
+        valor = abs(Decimal(request.data.get('valor')))
         if valor == 0:
             return Response(
                 {"error": "El valor de la utilidad ocasional no puede ser 0."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        # El 4x1000 se calcula sobre |valor|; el total conserva el signo del valor.
-        monto_base = abs(valor)
-        cuatro_por_mil = calcular_cuatro_por_mil(monto_base, tarjeta)
-        total = (monto_base + cuatro_por_mil) if valor > 0 else -(monto_base + cuatro_por_mil)
+        tipo = (request.data.get('tipo') or 'ganancia').strip().lower()
+        if tipo not in ('ganancia', 'perdida'):
+            return Response(
+                {"error": "El tipo debe ser 'ganancia' o 'perdida'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # 4x1000 sobre el valor; total siempre positivo (valor + 4x1000).
+        cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+        total = valor + cuatro_por_mil
 
-        sub_cuenta_credito, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
+        # La contracuenta se resuelve desde la configuracion global segun el tipo.
+        sub_cuenta_credito, error_response = _resolver_sub_cuenta_config(tipo)
         if error_response:
             return error_response
 
         if sub_cuenta_credito.pk == tarjeta.sub_cuenta_id:
             return Response(
-                {"error": "La sub-cuenta de la utilidad no puede ser la misma que la de la tarjeta."},
+                {"error": "La sub-cuenta configurada no puede ser la misma que la de la tarjeta."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -161,11 +218,14 @@ def create_utilidad_ocasional(request):
                 utilidad = UtilidadOcasional.objects.create(
                     usuario=request.user,
                     tarjeta=tarjeta,
+                    tipo=tipo,
                     valor=valor,
                     cuatro_por_mil=cuatro_por_mil,
                     total=total,
-                    debito=total,
-                    credito=total,
+                    # El 4x1000 NO se suma al asiento contable: debito/credito reflejan
+                    # solo el valor base. El 4x1000 queda registrado aparte.
+                    debito=valor,
+                    credito=valor,
                     sub_cuenta=sub_cuenta_credito,
                     observacion=request.data.get('observacion', ''),
                     fecha=request.data.get('fecha'),
@@ -199,6 +259,80 @@ def create_utilidad_ocasional(request):
     except Exception as e:
         return Response(
             {"error": f"Error inesperado: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, ModulePermission('utilidad_ocasional', 'view')])
+def get_config(request):
+    """Obtener la configuracion global de sub-cuentas (positivos / negativos)."""
+    try:
+        cfg = UtilidadOcasionalConfig.load()
+        return Response(serialize_config(cfg), status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {"error": f"Error al obtener la configuracion: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('utilidad_ocasional', 'edit')])
+def update_config(request):
+    """Actualizar la configuracion global de sub-cuentas.
+
+    Acepta `sub_cuenta_positiva` y/o `sub_cuenta_negativa` (ids). Si un campo no
+    viene en el payload se conserva; si viene vacio/None se limpia. Ambas deben
+    ser sub-cuentas validas (no eliminadas) y distintas entre si.
+    """
+    try:
+        cfg = UtilidadOcasionalConfig.load()
+
+        def _resolver(campo):
+            # No enviado -> conservar valor actual.
+            if campo not in request.data:
+                return getattr(cfg, campo), None
+            val = request.data.get(campo)
+            # Enviado vacio -> limpiar.
+            if val in (None, '', 0, '0'):
+                return None, None
+            try:
+                sub = SubCuenta.objects.get(pk=val)
+            except SubCuenta.DoesNotExist:
+                return None, Response(
+                    {"error": "La sub-cuenta especificada no existe."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            if sub.is_deleted:
+                return None, Response(
+                    {"error": "La sub-cuenta especificada esta eliminada."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            return sub, None
+
+        positiva, error_response = _resolver('sub_cuenta_positiva')
+        if error_response:
+            return error_response
+        negativa, error_response = _resolver('sub_cuenta_negativa')
+        if error_response:
+            return error_response
+
+        if positiva and negativa and positiva.pk == negativa.pk:
+            return Response(
+                {"error": "La sub-cuenta de positivos y la de negativos deben ser distintas."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        cfg.sub_cuenta_positiva = positiva
+        cfg.sub_cuenta_negativa = negativa
+        cfg.save()
+
+        return Response(serialize_config(cfg), status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al guardar la configuracion: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -355,30 +489,39 @@ def update_utilidad_ocasional(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        if 'sub_cuenta' in request.data:
-            sub_cuenta_credito, error_response = _validar_sub_cuenta(
-                request.data.get('sub_cuenta'), excluir_pk=utilidad.pk
-            )
-            if error_response:
-                return error_response
-            utilidad.sub_cuenta = sub_cuenta_credito
-
-        utilidad.valor = request.data.get('valor', utilidad.valor)
+        # Valor siempre positivo; tipo (ganancia/perdida) reemplaza al signo.
+        if 'valor' in request.data:
+            utilidad.valor = abs(Decimal(request.data.get('valor')))
+        if 'tipo' in request.data:
+            tipo = (request.data.get('tipo') or '').strip().lower()
+            if tipo not in ('ganancia', 'perdida'):
+                return Response(
+                    {"error": "El tipo debe ser 'ganancia' o 'perdida'."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            utilidad.tipo = tipo
         utilidad.observacion = request.data.get('observacion', utilidad.observacion)
         utilidad.fecha = request.data.get('fecha', utilidad.fecha)
 
-        valor = Decimal(utilidad.valor)
+        valor = abs(Decimal(utilidad.valor))
         if valor == 0:
             return Response(
                 {"error": "El valor de la utilidad ocasional no puede ser 0."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        # El 4x1000 se calcula sobre |valor|; el total conserva el signo del valor.
-        monto_base = abs(valor)
-        utilidad.cuatro_por_mil = calcular_cuatro_por_mil(monto_base, tarjeta)
-        utilidad.total = (monto_base + utilidad.cuatro_por_mil) if valor > 0 else -(monto_base + utilidad.cuatro_por_mil)
-        utilidad.debito = utilidad.total
-        utilidad.credito = utilidad.total
+        utilidad.valor = valor
+        # 4x1000 sobre el valor; total siempre positivo (valor + 4x1000).
+        utilidad.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
+        utilidad.total = valor + utilidad.cuatro_por_mil
+        # El 4x1000 NO se suma al asiento: debito/credito reflejan solo el valor base.
+        utilidad.debito = valor
+        utilidad.credito = valor
+
+        # La contracuenta se re-resuelve desde la configuracion global segun el tipo.
+        sub_cuenta_credito, error_response = _resolver_sub_cuenta_config(utilidad.tipo)
+        if error_response:
+            return error_response
+        utilidad.sub_cuenta = sub_cuenta_credito
 
         if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
             return Response(
@@ -477,6 +620,9 @@ def restore_utilidad_ocasional(request, pk):
 
         try:
             with transaction.atomic():
+                # El 4x1000 no entra al asiento; debito/credito reflejan solo el valor base.
+                utilidad.debito = utilidad.valor
+                utilidad.credito = utilidad.valor
                 utilidad.restore()
                 # Direccion del asiento segun el signo (positivo=ganancia / negativo=perdida).
                 debito_sc, credito_sc, monto_asiento = _asiento_legs(utilidad, tarjeta)
@@ -555,6 +701,7 @@ def utilidad_ocasional_history(request, pk):
                     'name': f"{h.history_user.first_name} {h.history_user.last_name}".strip()
                 } if h.history_user else None,
                 'tarjeta_id': h.tarjeta_id,
+                'tipo': h.tipo,
                 'valor': str(h.valor),
                 'cuatro_por_mil': str(h.cuatro_por_mil),
                 'total': str(h.total),

@@ -124,6 +124,9 @@ def sync_ledger(producer, instance):
             return
         if registro.deleted_at is None:
             registro.soft_delete()
+        # Revertir el asiento contable del 4x1000 (registro inactivo).
+        from cuatro_por_mil.services import sincronizar_asiento_4xmil
+        sincronizar_asiento_4xmil(registro)
         return
 
     # Caso 2: upsert
@@ -133,7 +136,7 @@ def sync_ledger(producer, instance):
     observacion = getattr(instance, 'observacion', None)
     valor_base  = producer['base_callable'](instance)
 
-    CuatroPorMil.objects.update_or_create(
+    registro, _ = CuatroPorMil.objects.update_or_create(
         modulo=modulo,
         registro_id=registro_id,
         defaults={
@@ -146,17 +149,27 @@ def sync_ledger(producer, instance):
             'deleted_at': None,  # restaura si estaba soft-deleted
         },
     )
+    # Postear/actualizar el asiento contable del 4x1000:
+    # Debito -> sub-cuenta configurada / Credito -> sub-cuenta de la tarjeta.
+    from cuatro_por_mil.services import sincronizar_asiento_4xmil
+    sincronizar_asiento_4xmil(registro, usuario=usuario)
 
 
 def hard_delete_ledger(producer, instance):
     """Elimina permanentemente el espejo cuando el padre se hard-deletea."""
     from cuatro_por_mil.models import CuatroPorMil  # import diferido
+    from movimiento_contable.services import revertir_asiento
     if instance.pk is None:
         return
-    CuatroPorMil.objects.filter(
+    registros = CuatroPorMil.objects.filter(
         modulo=producer['modulo'],
         registro_id=instance.pk,
-    ).delete()
+    )
+    # Revertir el asiento contable de cada registro antes de borrarlo.
+    for registro in registros:
+        if registro.asiento_id:
+            revertir_asiento(registro.asiento_id)
+    registros.delete()
 
 
 # ---------------------------------------------------------------------------

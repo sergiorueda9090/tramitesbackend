@@ -2,6 +2,8 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    path('config/',                 views.get_config,                 name='get_cuatro_por_mil_config'),
+    path('config/update/',          views.update_config,              name='update_cuatro_por_mil_config'),
     path('list/',                   views.list_cuatro_por_mil,        name='list_cuatro_por_mil'),
     path('stats/',                  views.stats_cuatro_por_mil,       name='stats_cuatro_por_mil'),
     path('create/',                 views.create_cuatro_por_mil,      name='create_cuatro_por_mil'),

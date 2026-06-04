@@ -7,12 +7,15 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import TruncDate, TruncMonth, Coalesce
 
-from cuatro_por_mil.models import CuatroPorMil, ModuloOrigen
+from cuatro_por_mil.models import CuatroPorMil, CuatroPorMilConfig, ModuloOrigen
+from cuatro_por_mil.services import sincronizar_asiento_4xmil
 from tarjetas.models import Tarjeta
+from sub_cuentas.models import SubCuenta
+from movimiento_contable.services import revertir_asiento
 from .permissions import RolePermission, ModulePermission
 
 
@@ -34,7 +37,10 @@ def serialize_cuatro_por_mil(registro):
             'numero': registro.tarjeta.numero,
             'titular': registro.tarjeta.titular,
             'cuatro_por_mil': registro.tarjeta.cuatro_por_mil,
+            'sub_cuenta_codigo': registro.tarjeta.sub_cuenta.codigo if registro.tarjeta.sub_cuenta_id else None,
+            'sub_cuenta_nombre': registro.tarjeta.sub_cuenta.nombre_sub_cuenta if registro.tarjeta.sub_cuenta_id else None,
         } if registro.tarjeta else None,
+        'asiento_id': str(registro.asiento_id) if registro.asiento_id else None,
         'observacion': registro.observacion,
         'fecha': registro.fecha,
         'usuario': registro.usuario_id,
@@ -88,16 +94,18 @@ def create_cuatro_por_mil(request):
         if tarjeta_id:
             tarjeta = get_object_or_404(Tarjeta.objects.filter(deleted_at__isnull=True), pk=tarjeta_id)
 
-        registro = CuatroPorMil.objects.create(
-            modulo=modulo,
-            registro_id=registro_id,
-            valor=valor,
-            valor_base=valor_base,
-            tarjeta=tarjeta,
-            observacion=request.data.get('observacion', ''),
-            fecha=request.data.get('fecha'),
-            usuario=request.user,
-        )
+        with transaction.atomic():
+            registro = CuatroPorMil.objects.create(
+                modulo=modulo,
+                registro_id=registro_id,
+                valor=valor,
+                valor_base=valor_base,
+                tarjeta=tarjeta,
+                observacion=request.data.get('observacion', ''),
+                fecha=request.data.get('fecha'),
+                usuario=request.user,
+            )
+            sincronizar_asiento_4xmil(registro, usuario=request.user)
 
         return Response(serialize_cuatro_por_mil(registro), status=status.HTTP_201_CREATED)
 
@@ -118,7 +126,7 @@ def create_cuatro_por_mil(request):
 def list_cuatro_por_mil(request):
     """Listar registros de 4x1000 con filtros y paginación."""
     try:
-        registros = CuatroPorMil.objects.select_related('tarjeta', 'usuario').all()
+        registros = CuatroPorMil.objects.select_related('tarjeta__sub_cuenta', 'usuario').all()
 
         modulo = request.query_params.get('modulo')
         if modulo:
@@ -203,7 +211,7 @@ def get_cuatro_por_mil(request, pk):
     """Obtener un registro de 4x1000 por ID."""
     try:
         registro = get_object_or_404(
-            CuatroPorMil.objects.select_related('tarjeta', 'usuario'),
+            CuatroPorMil.objects.select_related('tarjeta__sub_cuenta', 'usuario'),
             pk=pk
         )
         return Response(serialize_cuatro_por_mil(registro), status=status.HTTP_200_OK)
@@ -260,7 +268,10 @@ def update_cuatro_por_mil(request, pk):
         registro.observacion = request.data.get('observacion', registro.observacion)
         registro.fecha       = request.data.get('fecha', registro.fecha)
 
-        registro.save()
+        with transaction.atomic():
+            registro.save()
+            # El valor / tarjeta pudo cambiar: re-sincronizar el asiento contable.
+            sincronizar_asiento_4xmil(registro, usuario=request.user)
 
         return Response(serialize_cuatro_por_mil(registro), status=status.HTTP_200_OK)
 
@@ -282,7 +293,10 @@ def delete_cuatro_por_mil(request, pk):
     """Eliminar un registro de 4x1000 (soft delete)."""
     try:
         registro = get_object_or_404(CuatroPorMil.objects, pk=pk)
-        registro.soft_delete()
+        with transaction.atomic():
+            registro.soft_delete()
+            # Revertir el asiento contable asociado.
+            sincronizar_asiento_4xmil(registro, usuario=request.user)
         return Response(
             {"message": "Registro eliminado correctamente"},
             status=status.HTTP_200_OK
@@ -299,13 +313,18 @@ def delete_cuatro_por_mil(request, pk):
 def restore_cuatro_por_mil(request, pk):
     """Restaurar un registro de 4x1000 eliminado."""
     try:
-        registro = get_object_or_404(CuatroPorMil.objects, pk=pk)
+        registro = get_object_or_404(
+            CuatroPorMil.objects.select_related('tarjeta__sub_cuenta'), pk=pk
+        )
         if not registro.is_deleted:
             return Response(
                 {"error": "El registro no está eliminado"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        registro.restore()
+        with transaction.atomic():
+            registro.restore()
+            # Volver a postear el asiento contable del 4x1000.
+            sincronizar_asiento_4xmil(registro, usuario=request.user)
         return Response(serialize_cuatro_por_mil(registro), status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -320,7 +339,11 @@ def hard_delete_cuatro_por_mil(request, pk):
     """Eliminar permanentemente un registro de 4x1000."""
     try:
         registro = get_object_or_404(CuatroPorMil.objects, pk=pk)
-        registro.delete()
+        with transaction.atomic():
+            # Revertir el asiento contable antes de borrar definitivamente.
+            if registro.asiento_id:
+                revertir_asiento(registro.asiento_id)
+            registro.delete()
         return Response(
             {"message": "Registro eliminado permanentemente"},
             status=status.HTTP_204_NO_CONTENT
@@ -377,6 +400,75 @@ def cuatro_por_mil_history(request, pk):
     except Exception as e:
         return Response(
             {"error": f"Error al obtener historial: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ---------------------------------------------------------------------------
+# Configuración (singleton): sub-cuenta de débito por defecto
+# ---------------------------------------------------------------------------
+
+def serialize_config(cfg):
+    """Convierte la configuracion (singleton) a diccionario."""
+    sc = cfg.sub_cuenta_debito
+    return {
+        'sub_cuenta_debito': cfg.sub_cuenta_debito_id,
+        'sub_cuenta_debito_codigo': sc.codigo if sc else None,
+        'sub_cuenta_debito_nombre': sc.nombre_sub_cuenta if sc else None,
+        'updated_at': cfg.updated_at,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, ModulePermission('cuatro_por_mil', 'view')])
+def get_config(request):
+    """Obtener la configuracion del modulo (sub-cuenta de debito por defecto)."""
+    try:
+        cfg = CuatroPorMilConfig.load()
+        return Response(serialize_config(cfg), status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {"error": f"Error al obtener la configuracion: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cuatro_por_mil', 'edit')])
+def update_config(request):
+    """Actualizar la sub-cuenta de debito por defecto.
+
+    Acepta `sub_cuenta_debito` (id). Si viene vacio/None se limpia. Debe ser una
+    sub-cuenta valida (no eliminada).
+    """
+    try:
+        cfg = CuatroPorMilConfig.load()
+
+        if 'sub_cuenta_debito' in request.data:
+            val = request.data.get('sub_cuenta_debito')
+            if val in (None, '', 0, '0'):
+                cfg.sub_cuenta_debito = None
+            else:
+                try:
+                    sub = SubCuenta.objects.get(pk=val)
+                except SubCuenta.DoesNotExist:
+                    return Response(
+                        {"error": "La sub-cuenta especificada no existe."},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                if sub.is_deleted:
+                    return Response(
+                        {"error": "La sub-cuenta especificada esta eliminada."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                cfg.sub_cuenta_debito = sub
+
+        cfg.save()
+        return Response(serialize_config(cfg), status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Error al guardar la configuracion: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
