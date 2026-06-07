@@ -82,13 +82,6 @@ def serialize_config(cfg):
     }
 
 
-def calcular_cuatro_por_mil(valor, tarjeta):
-    """Calcula el cuatro por mil si la tarjeta lo tiene activo (sobre el valor dado)."""
-    if tarjeta.cuatro_por_mil == '1':
-        return (Decimal(valor) * Decimal('4')) / Decimal('1000')
-    return Decimal('0')
-
-
 def _asiento_legs(utilidad, tarjeta):
     """Devuelve (debito_sub_cuenta, credito_sub_cuenta, monto_positivo) segun el `tipo`.
 
@@ -198,9 +191,11 @@ def create_utilidad_ocasional(request):
                 {"error": "El tipo debe ser 'ganancia' o 'perdida'."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        # 4x1000 sobre el valor; total siempre positivo (valor + 4x1000).
-        cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-        total = valor + cuatro_por_mil
+        # La utilidad ocasional NO genera 4x1000 (ni ganancia ni perdida): es un
+        # ajuste de utilidad, no una transaccion sujeta al gravamen financiero.
+        # cuatro_por_mil=0 => la senal de cuatro_por_mil no crea/mantiene espejo.
+        cuatro_por_mil = Decimal('0')
+        total = valor
 
         # La contracuenta se resuelve desde la configuracion global segun el tipo.
         sub_cuenta_credito, error_response = _resolver_sub_cuenta_config(tipo)
@@ -510,9 +505,11 @@ def update_utilidad_ocasional(request, pk):
                 status=status.HTTP_400_BAD_REQUEST
             )
         utilidad.valor = valor
-        # 4x1000 sobre el valor; total siempre positivo (valor + 4x1000).
-        utilidad.cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
-        utilidad.total = valor + utilidad.cuatro_por_mil
+        # La utilidad ocasional NO genera 4x1000 (ni ganancia ni perdida).
+        # cuatro_por_mil=0 => al guardar, la senal soft-deletea cualquier espejo
+        # 4x1000 previo de este registro (auto-limpieza de datos antiguos).
+        utilidad.cuatro_por_mil = Decimal('0')
+        utilidad.total = valor
         # El 4x1000 NO se suma al asiento: debito/credito reflejan solo el valor base.
         utilidad.debito = valor
         utilidad.credito = valor

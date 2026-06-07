@@ -75,16 +75,10 @@ PRODUCERS = [
         'tarjeta_attr': 'tarjeta',
         'base_callable': _base_valor_default,
     },
-    {
-        'app': 'utilidad_ocasional',
-        'model': 'UtilidadOcasional',
-        'modulo': 'utilidad_ocasional',
-        'valor_field': 'cuatro_por_mil',
-        'fecha_attr': 'fecha',
-        'usuario_attr': 'usuario',
-        'tarjeta_attr': 'tarjeta',
-        'base_callable': _base_valor_default,
-    },
+    # NOTA: utilidad_ocasional NO esta aqui a proposito. La utilidad ocasional
+    # no genera 4x1000 (ni ganancia ni perdida), por lo que no produce espejo en
+    # el ledger CuatroPorMil. Los registros historicos se limpian con el comando
+    # `limpiar_4xmil_utilidad_ocasional`.
     {
         'app': 'finalizados_tramites',
         'model': 'TramiteFinalizado',
