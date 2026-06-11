@@ -8,13 +8,33 @@ from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.db import DatabaseError, transaction
 from django.db.models import Q, Count
-from datetime import datetime
+from django.utils import timezone
+from django.conf import settings
+from django.core.files.base import ContentFile
+from datetime import datetime, timedelta
 import os
+import urllib.request
+import urllib.error
 
 from ..models import TramiteFinalizado, TramiteFinalizadoPdf
 from .permissions import RolePermission, ModulePermission
 
 PDF_MAX_BYTES = 15 * 1024 * 1024  # 15 MB por archivo
+
+# Host del scraper externo que entrega el PDF de Previsora.
+EXTERNAL_SCRAPER_HOST = 'https://soat-scraper.qf4cjg.easypanel.host'
+
+# Ventana (minutos) tras confirmar el pago durante la cual se puede descargar
+# automáticamente el PDF de la aseguradora. Al expirar, el backend lo bloquea.
+PDF_DESCARGA_VENTANA_MINUTOS = 5
+
+
+def _pdf_descarga_deadline(finalizado):
+    """Momento límite para la descarga automática del PDF (pago + ventana)."""
+    base = finalizado.pago_confirmado_at or finalizado.created_at
+    if not base:
+        return None
+    return base + timedelta(minutes=PDF_DESCARGA_VENTANA_MINUTOS)
 
 
 def serialize_finalizado(t):
@@ -60,6 +80,8 @@ def serialize_finalizado(t):
         'tipo_tramite_display': t.get_tipo_tramite_display(),
         'tipo_vehiculo': t.tipo_vehiculo,
         'tipo_vehiculo_display': t.get_tipo_vehiculo_display() if t.tipo_vehiculo else '',
+        'entidad': t.entidad,
+        'entidad_display': t.get_entidad_display() if t.entidad else '',
 
         'grupo_soat': t.grupo_soat,
         'grupo_soat_display': t.get_grupo_soat_display() if t.grupo_soat else '',
@@ -101,6 +123,9 @@ def serialize_finalizado(t):
 
         'observacion': t.observacion,
         'pago_confirmado_at': t.pago_confirmado_at,
+        # Ventana de descarga automática del PDF (5 min desde el pago).
+        'pdf_descarga_hasta': _pdf_descarga_deadline(t),
+        'pdf_descarga_vencida': bool(_pdf_descarga_deadline(t) and timezone.now() > _pdf_descarga_deadline(t)),
         'cuatro_por_mil_valor': str(t.cuatro_por_mil_valor) if t.cuatro_por_mil_valor is not None else '0',
         'pdfs_count': getattr(t, 'pdfs_count', None) if hasattr(t, 'pdfs_count') else t.pdfs.filter(deleted_at__isnull=True).count(),
 
@@ -172,6 +197,7 @@ def crear_desde_pasarela(request):
                 tarjeta=tarjeta_final,
                 tipo_tramite=pasarela.tipo_tramite,
                 tipo_vehiculo=pasarela.tipo_vehiculo,
+                entidad=pasarela.entidad,
                 grupo_soat=pasarela.grupo_soat,
                 grupo_clase_runt=pasarela.grupo_clase_runt,
                 grupo_subcriterio=pasarela.grupo_subcriterio,
@@ -630,3 +656,171 @@ def download_pdf(request, pk, pdf_pk):
         return Response({"error": "Archivo no encontrado."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({"error": f"Error al descargar PDF: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ==================== DESCARGA AUTOMÁTICA DE PDF (por aseguradora) ====================
+
+# El scraper de Previsora exige el tipo de documento como CC/CE/NIT/PA/TI.
+# Los datos pueden venir como código de una letra (C/E/T/P del cotizador) o como
+# el código del modelo (CC/CE/NIT/PAS). Se normaliza a lo que espera Previsora.
+_TIPO_DOC_PREVISORA = {
+    'C': 'CC', 'CC': 'CC',
+    'E': 'CE', 'CE': 'CE',
+    'T': 'TI', 'TI': 'TI',
+    'P': 'PA', 'PA': 'PA', 'PAS': 'PA',
+    'NIT': 'NIT',
+}
+
+
+def _tipo_doc_previsora(valor):
+    """Normaliza el tipo de documento al formato de Previsora; None si no aplica."""
+    return _TIPO_DOC_PREVISORA.get((valor or '').strip().upper())
+
+
+def _ventana_descarga_error(finalizado):
+    """Devuelve un Response de error si la ventana de 5 min ya expiró, o None."""
+    deadline = _pdf_descarga_deadline(finalizado)
+    if deadline and timezone.now() > deadline:
+        return Response(
+            {"error": f"La ventana de {PDF_DESCARGA_VENTANA_MINUTOS} minutos para descargar el PDF ya expiró."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+def _guardar_pdf_descargado(finalizado, content, filename, descripcion, user):
+    """Persiste el PDF descargado como TramiteFinalizadoPdf (storage local)."""
+    pdf = TramiteFinalizadoPdf(
+        finalizado=finalizado,
+        nombre_original=filename,
+        descripcion=descripcion,
+        tamano_bytes=len(content),
+        content_type='application/pdf',
+        uploaded_by=user,
+    )
+    pdf.archivo.save(filename, ContentFile(content), save=True)
+    return pdf
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('finalizados_tramites', 'create')])
+def descargar_pdf_previsora(request, pk):
+    """
+    Descarga el PDF del SOAT desde el portal Previsora y lo adjunta al finalizado.
+    Usa el scraper: GET /api/previsora_pdf/<placa>/<tipo_documento>/<numero_documento>.
+    Solo permitido dentro de la ventana de 5 min tras confirmar el pago.
+    """
+    finalizado = get_object_or_404(TramiteFinalizado.objects, pk=pk)
+
+    err = _ventana_descarga_error(finalizado)
+    if err:
+        return err
+
+    placa = (finalizado.placa or '').strip()
+    num_doc = (finalizado.numero_documento or '').strip()
+    if not placa or not num_doc:
+        return Response({"error": "El finalizado no tiene placa o documento para consultar el PDF."}, status=status.HTTP_400_BAD_REQUEST)
+
+    tipo_doc = _tipo_doc_previsora(finalizado.tipo_documento)
+    if not tipo_doc:
+        return Response(
+            {"error": f"El tipo de documento '{finalizado.tipo_documento or ''}' no es soportado por Previsora (debe ser CC, CE, NIT, PA o TI)."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    url = f"{EXTERNAL_SCRAPER_HOST}/api/previsora_pdf/{placa}/{tipo_doc}/{num_doc}"
+    try:
+        req = urllib.request.Request(url, method='GET')
+        req.add_header('Accept', 'application/pdf')
+        with urllib.request.urlopen(req, timeout=120) as response:
+            content = response.read()
+            ctype = response.headers.get('Content-Type', '')
+    except urllib.error.HTTPError as e:
+        detalle = e.read().decode('utf-8', errors='replace')
+        return Response(
+            {"error": f"Error del servicio de Previsora: {e.code}", "detalle": detalle},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY,
+        )
+    except urllib.error.URLError as e:
+        return Response({"error": f"No se pudo conectar al servicio de Previsora: {str(e.reason)}"}, status=status.HTTP_502_BAD_GATEWAY)
+    except Exception as e:
+        return Response({"error": f"Error inesperado al descargar el PDF de Previsora: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Si el scraper devolvió JSON (no un PDF), es un error de negocio: lo reenviamos.
+    if not content or b'%PDF' not in content[:1024]:
+        cuerpo = content.decode('utf-8', errors='replace') if content else ''
+        return Response(
+            {"error": "El portal de Previsora no devolvió un PDF.", "detalle": cuerpo[:2000]},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    filename = f"previsora_{placa}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf = _guardar_pdf_descargado(finalizado, content, filename, 'PDF Previsora (descarga automática)', request.user)
+    return Response(serialize_pdf(pdf, request), status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('finalizados_tramites', 'create')])
+def descargar_pdf_mundial(request, pk):
+    """
+    Descarga el PDF de Mundial desde S3 (donde lo deja el proceso de correo
+    automático) y lo adjunta al finalizado. Busca por placa dentro del prefijo
+    configurado y toma el objeto más reciente.
+    Solo permitido dentro de la ventana de 5 min tras confirmar el pago.
+    """
+    finalizado = get_object_or_404(TramiteFinalizado.objects, pk=pk)
+
+    err = _ventana_descarga_error(finalizado)
+    if err:
+        return err
+
+    placa = (finalizado.placa or '').strip()
+    if not placa:
+        return Response({"error": "El finalizado no tiene placa para buscar el PDF en S3."}, status=status.HTTP_400_BAD_REQUEST)
+
+    bucket = getattr(settings, 'AWS_S3_BUCKET', '')
+    if not bucket:
+        return Response({"error": "El almacenamiento S3 no está configurado (AWS_S3_BUCKET)."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    try:
+        import boto3
+    except ImportError:
+        return Response({"error": "Falta la dependencia 'boto3' en el backend para acceder a S3."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    prefijo = getattr(settings, 'AWS_S3_MUNDIAL_PREFIX', '') or ''
+    try:
+        s3 = boto3.client(
+            's3',
+            aws_access_key_id=getattr(settings, 'AWS_ACCESS_KEY_ID', '') or None,
+            aws_secret_access_key=getattr(settings, 'AWS_SECRET_ACCESS_KEY', '') or None,
+            region_name=getattr(settings, 'AWS_S3_REGION', 'us-east-1'),
+        )
+
+        # Buscar el objeto más reciente cuya key contenga la placa (case-insensitive).
+        placa_low = placa.lower()
+        mejor = None  # (LastModified, Key)
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefijo):
+            for obj in page.get('Contents', []):
+                if placa_low in obj['Key'].lower():
+                    if mejor is None or obj['LastModified'] > mejor[0]:
+                        mejor = (obj['LastModified'], obj['Key'])
+
+        if not mejor:
+            return Response(
+                {"error": f"No se encontró el PDF de Mundial en S3 para la placa {placa}. Verifica que el correo automático ya lo haya almacenado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        key = mejor[1]
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        content = obj['Body'].read()
+    except Exception as e:
+        return Response({"error": f"Error al obtener el PDF de Mundial desde S3: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if not content:
+        return Response({"error": "El objeto en S3 está vacío."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    filename = f"mundial_{placa}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf = _guardar_pdf_descargado(finalizado, content, filename, 'PDF Mundial (descarga automática desde S3)', request.user)
+    return Response(serialize_pdf(pdf, request), status=status.HTTP_201_CREATED)

@@ -85,6 +85,8 @@ INSTALLED_APPS = [
     'plan_de_cuentas',
     'sub_cuentas',
     'movimiento_contable',
+    'cotizador_rapido',
+    'correos_aleatorios',
 ]
 
 MIDDLEWARE = [
@@ -205,6 +207,17 @@ STATIC_URL = 'static/'
 # En produccion el servidor web (nginx) debe servir MEDIA_ROOT directamente.
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Almacenamiento S3 (descarga del PDF de Mundial, depositado allí por el proceso
+# de correo automático). Valores por defecto = bucket de pruebas; en producción
+# se sobreescriben por .env. Si las credenciales faltan, boto3 intenta la cadena
+# de credenciales por defecto (perfil/instancia).
+AWS_S3_BUCKET         = os.getenv('AWS_S3_BUCKET', 'documentospdfmovilidad')
+AWS_S3_REGION         = os.getenv('AWS_S3_REGION', 'us-east-1')
+AWS_ACCESS_KEY_ID     = os.getenv('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', '')
+# Prefijo (carpeta) dentro del bucket donde el correo automático deja los PDFs de Mundial.
+AWS_S3_MUNDIAL_PREFIX = os.getenv('AWS_S3_MUNDIAL_PREFIX', 'mundial/')
 
 # Limites de upload (15 MB por archivo, 80 MB por request)
 DATA_UPLOAD_MAX_MEMORY_SIZE = 80 * 1024 * 1024

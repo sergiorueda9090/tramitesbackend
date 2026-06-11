@@ -40,9 +40,14 @@ def serialize_cotizador(cotizador):
             'id': cotizador.precio_cliente.id,
         } if cotizador.precio_cliente else None,
         'descripcion': cotizador.descripcion,
-        'precio_lay': str(cotizador.precio_lay),
-        'comision': str(cotizador.comision),
+        'precio_lay': str(cotizador.precio_lay) if cotizador.precio_lay is not None else None,
+        'comision': str(cotizador.comision) if cotizador.comision is not None else None,
+        'precio_previsora': str(cotizador.precio_previsora) if cotizador.precio_previsora is not None else None,
+        'precio_runt': str(cotizador.precio_runt) if cotizador.precio_runt is not None else None,
+        'precios_coinciden': cotizador.precios_coinciden,
+        'es_caso_especial': cotizador.es_caso_especial,
         'placa': cotizador.placa,
+        'vin': cotizador.vin,
         'clindraje': cotizador.clindraje,
         'modelo': cotizador.modelo,
         'chasis': cotizador.chasis,
@@ -78,40 +83,40 @@ def serialize_pago(pago):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'create')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'create')])
 def create_cotizador(request):
     """Crear un nuevo cotizador"""
     try:
-        required_fields = ['cliente', 'etiqueta', 'precio_cliente', 'descripcion',
-                          'precio_lay', 'comision', 'placa', 'clindraje', 'modelo',
-                          'chasis', 'numero_documento', 'nombre_completo', 'telefono',
-                          'correo', 'direccion']
-
-        for field in required_fields:
-            if not request.data.get(field):
-                return Response(
-                    {"error": f"El campo {field} es requerido."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # En la cotización rápida solo la placa es obligatoria; el resto es opcional.
+        if not request.data.get('placa'):
+            return Response(
+                {"error": "El campo placa es requerido."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         cotizador = Cotizador.objects.create(
             usuario=request.user,
-            cliente_id=request.data.get('cliente'),
-            etiqueta_id=request.data.get('etiqueta'),
-            precio_cliente_id=request.data.get('precio_cliente'),
-            descripcion=request.data.get('descripcion'),
-            precio_lay=request.data.get('precio_lay'),
-            comision=request.data.get('comision'),
+            cliente_id=request.data.get('cliente') or None,
+            etiqueta_id=request.data.get('etiqueta') or None,
+            precio_cliente_id=request.data.get('precio_cliente') or None,
+            descripcion=request.data.get('descripcion', ''),
+            precio_lay=request.data.get('precio_lay') or None,
+            comision=request.data.get('comision') or None,
+            precio_previsora=request.data.get('precio_previsora') or None,
+            precio_runt=request.data.get('precio_runt') or None,
+            precios_coinciden=bool(request.data.get('precios_coinciden', False)),
+            es_caso_especial=bool(request.data.get('es_caso_especial', False)),
             placa=request.data.get('placa'),
-            clindraje=request.data.get('clindraje'),
-            modelo=request.data.get('modelo'),
-            chasis=request.data.get('chasis'),
+            vin=request.data.get('vin', ''),
+            clindraje=request.data.get('clindraje', ''),
+            modelo=request.data.get('modelo', ''),
+            chasis=request.data.get('chasis', ''),
             tipo_documento=request.data.get('tipo_documento', 'CC'),
-            numero_documento=request.data.get('numero_documento'),
-            nombre_completo=request.data.get('nombre_completo'),
-            telefono=request.data.get('telefono'),
-            correo=request.data.get('correo'),
-            direccion=request.data.get('direccion'),
+            numero_documento=request.data.get('numero_documento', ''),
+            nombre_completo=request.data.get('nombre_completo', ''),
+            telefono=request.data.get('telefono', ''),
+            correo=request.data.get('correo', ''),
+            direccion=request.data.get('direccion', ''),
         )
 
         return Response(serialize_cotizador(cotizador), status=status.HTTP_201_CREATED)
@@ -129,7 +134,7 @@ def create_cotizador(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, ModulePermission('cotizador_rapido', 'view')])
 def list_cotizadores(request):
     """Listar cotizadores con filtros y paginación"""
     try:
@@ -229,7 +234,7 @@ def list_cotizadores(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, ModulePermission('cotizador_rapido', 'view')])
 def get_cotizador(request, pk):
     """Obtener un cotizador por ID"""
     try:
@@ -246,7 +251,7 @@ def get_cotizador(request, pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'edit')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'edit')])
 def update_cotizador(request, pk):
     """Actualizar un cotizador"""
     try:
@@ -264,7 +269,14 @@ def update_cotizador(request, pk):
         cotizador.descripcion = request.data.get('descripcion', cotizador.descripcion)
         cotizador.precio_lay = request.data.get('precio_lay', cotizador.precio_lay)
         cotizador.comision = request.data.get('comision', cotizador.comision)
+        cotizador.precio_previsora = request.data.get('precio_previsora', cotizador.precio_previsora)
+        cotizador.precio_runt = request.data.get('precio_runt', cotizador.precio_runt)
+        if 'precios_coinciden' in request.data:
+            cotizador.precios_coinciden = bool(request.data.get('precios_coinciden'))
+        if 'es_caso_especial' in request.data:
+            cotizador.es_caso_especial = bool(request.data.get('es_caso_especial'))
         cotizador.placa = request.data.get('placa', cotizador.placa)
+        cotizador.vin = request.data.get('vin', cotizador.vin)
         cotizador.clindraje = request.data.get('clindraje', cotizador.clindraje)
         cotizador.modelo = request.data.get('modelo', cotizador.modelo)
         cotizador.chasis = request.data.get('chasis', cotizador.chasis)
@@ -298,7 +310,7 @@ def update_cotizador(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'delete')])
 def delete_cotizador(request, pk):
     """Eliminar un cotizador (soft delete)"""
     try:
@@ -316,7 +328,7 @@ def delete_cotizador(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'delete')])
 def restore_cotizador(request, pk):
     """Restaurar un cotizador eliminado"""
     try:
@@ -336,7 +348,7 @@ def restore_cotizador(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'delete')])
 def hard_delete_cotizador(request, pk):
     """Eliminar permanentemente un cotizador"""
     try:
@@ -354,7 +366,7 @@ def hard_delete_cotizador(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'view')])
 def cotizador_history(request, pk):
     """Obtener el historial de cambios de un cotizador"""
     try:
@@ -422,7 +434,7 @@ ESTADO_TRANSICIONES = {
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'edit')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'edit')])
 def cambiar_estado(request, pk):
     """
     Cambiar el estado del cotizador al siguiente paso.
@@ -486,7 +498,7 @@ def cambiar_estado(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'edit')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'edit')])
 def revertir_estado(request, pk):
     """
     Revertir el estado del cotizador al paso anterior.
@@ -563,7 +575,7 @@ def revertir_estado(request, pk):
 # ==================== PAGOS ====================
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cotizador', 'create')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cotizador_rapido', 'create')])
 def create_pago(request, cotizador_pk):
     """Crear un nuevo pago para un cotizador"""
     try:
@@ -599,7 +611,7 @@ def create_pago(request, cotizador_pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, ModulePermission('cotizador_rapido', 'view')])
 def list_pagos(request, cotizador_pk):
     """Listar pagos de un cotizador"""
     try:
@@ -628,7 +640,7 @@ def list_pagos(request, cotizador_pk):
 
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cotizador', 'edit')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'contador']), ModulePermission('cotizador_rapido', 'edit')])
 def update_pago(request, pk):
     """Actualizar un pago"""
     try:
@@ -655,7 +667,7 @@ def update_pago(request, pk):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'delete')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'delete')])
 def delete_pago(request, pk):
     """Eliminar un pago (soft delete)"""
     try:
@@ -680,7 +692,7 @@ APIS EXTERNAS PARA INTEGRACIÓN CON SISTEMAS DE TERCEROS (SIN AUTENTICACIÓN)
 Estas APIs permiten a sistemas externos consultar información de cotizadores sin necesidad de autenticación.
 """
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'view')])
 def external_placa_documento_runt(request):
     
     placa            = request.query_params.get('placa', None)
@@ -722,7 +734,7 @@ def external_placa_documento_runt(request):
         )
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'view')])
 def get_user_info_external(request):
     
     numero_documento = request.query_params.get('numero_documento', None)
@@ -765,7 +777,7 @@ def get_user_info_external(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'view')])
 def external_placa_runt(request):
     """
     Recibe una imagen de tarjeta de propiedad (multipart/form-data)
@@ -818,7 +830,7 @@ def external_placa_runt(request):
     
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'view')])
 def external_vin(request):
     """
     Recibe una imagen de tarjeta de propiedad (multipart/form-data)
@@ -871,7 +883,7 @@ def external_vin(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'view')])
 def external_runt_vehiculo_vin(request):
     """
     Consulta datos de un vehículo en el RUNT usando el VIN (17 dígitos).
@@ -911,7 +923,7 @@ def external_runt_vehiculo_vin(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador_rapido', 'view')])
 def api_falabella(request):
     placa = request.query_params.get('placa', None)
 
@@ -949,7 +961,7 @@ def api_falabella(request):
     
 
 @api_view(['POST', 'GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'view')])
 def external_placa(request):
     """
     Resuelve los datos de un vehículo a partir de la PLACA escrita (2da opción
@@ -993,7 +1005,7 @@ def external_placa(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador', 'view')])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('cotizador_rapido', 'view')])
 def get_nombre_cliente(request):
 
     numero_documento = request.query_params.get('numero_documento', None)

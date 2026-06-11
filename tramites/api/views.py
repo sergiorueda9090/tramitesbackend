@@ -7,9 +7,17 @@ from django.shortcuts import get_object_or_404
 from django.db import DatabaseError
 from django.db.models import Q, Exists, OuterRef
 from datetime import datetime
+import urllib.request
+import urllib.error
+import json
 
 from ..models import Tramite, ENTIDAD_POR_TIPO_VEHICULO
+from correos_aleatorios.models import CorreoAleatorio
 from .permissions import RolePermission, ModulePermission
+
+# Hosts de los generadores externos de links de pago.
+PREVISORA_URLPAGO = 'http://130.94.105.156:9515/api/urlpago'
+MUNDIAL_URL       = 'https://soat-scraper.qf4cjg.easypanel.host/api/mundial'
 
 
 def entidad_por_defecto(tipo_vehiculo):
@@ -745,3 +753,164 @@ def revertir_estado(request, pk):
             {"error": f"Error al revertir estado: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# ==================== GENERADORES DE LINKS DE PAGO ====================
+# Generan el link de pago (Previsora / Mundial) para un trámite, usando un
+# correo aleatorio del pool del módulo `correos_aleatorios`.
+
+def _formatear_token(valor):
+    """
+    Normaliza un nombre/apellido para el generador de Previsora.
+    Si es compuesto (tiene espacios, ej. "de la cruz") lo concatena en uno solo
+    ("delacruz"). Devuelve cadena vacía si no hay valor.
+    """
+    if not valor:
+        return ''
+    return ''.join(str(valor).split())
+
+
+def _obtener_correo_aleatorio():
+    """Devuelve un CorreoAleatorio activo (no eliminado) al azar, o None."""
+    return (
+        CorreoAleatorio.objects
+        .filter(activo=True, deleted_at__isnull=True)
+        .order_by('?')
+        .first()
+    )
+
+
+def _resolver_correo(request):
+    """
+    Resuelve el correo a usar: el explícito del request o uno aleatorio del pool.
+    Devuelve (correo_str, correo_obj|None, error_response|None).
+    """
+    correo = request.data.get('correo') or request.data.get('email')
+    if correo:
+        return correo, None, None
+    obj = _obtener_correo_aleatorio()
+    if not obj:
+        return None, None, Response(
+            {"error": "No hay correos aleatorios disponibles. Agrega al menos uno activo en el módulo de Correos Aleatorios."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    return obj.correo, obj, None
+
+
+def _post_json_externo(url, payload, timeout=30):
+    """
+    POST JSON a un servicio externo. Devuelve (data, error_response).
+    Si error_response no es None, el caller debe retornarlo directamente.
+    """
+    body = json.dumps(payload).encode('utf-8')
+    try:
+        req = urllib.request.Request(url, data=body, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        req.add_header('Accept', 'application/json')
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        return data, None
+    except urllib.error.HTTPError as e:
+        detalle = e.read().decode('utf-8', errors='replace')
+        return None, Response(
+            {"error": f"Error del servicio externo: {e.code}", "detalle": detalle},
+            status=e.code if 400 <= e.code < 600 else status.HTTP_502_BAD_GATEWAY
+        )
+    except urllib.error.URLError as e:
+        return None, Response(
+            {"error": f"No se pudo conectar al servicio externo: {str(e.reason)}"},
+            status=status.HTTP_502_BAD_GATEWAY
+        )
+    except Exception as e:
+        return None, Response(
+            {"error": f"Error inesperado al generar el link: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('tramites', 'view')])
+def generar_link_previsora(request):
+    """
+    Genera un link de pago de Previsora para un trámite.
+    Toma un correo aleatorio del pool (o el provisto en `correo`) y normaliza
+    nombres/apellidos compuestos. `nombre2` y `apellido2` son opcionales.
+    """
+    placa = request.data.get('placa')
+    documento = request.data.get('documento') or request.data.get('numero_documento')
+    if not placa or not documento:
+        return Response({"error": "Los campos placa y documento son requeridos."}, status=status.HTTP_400_BAD_REQUEST)
+
+    correo, correo_obj, err = _resolver_correo(request)
+    if err:
+        return err
+
+    payload = {
+        "placa": placa,
+        "tipodocumento": request.data.get('tipodocumento', 1),
+        "documento": documento,
+        "nombre": _formatear_token(request.data.get('nombre', '')),
+        "apellido": _formatear_token(request.data.get('apellido', '')),
+        "telefono": request.data.get('telefono', ''),
+        "correo": correo,
+    }
+    # Campos opcionales: solo se incluyen si vienen con valor.
+    nombre2 = _formatear_token(request.data.get('nombre2', ''))
+    if nombre2:
+        payload["nombre2"] = nombre2
+    apellido2 = _formatear_token(request.data.get('apellido2', ''))
+    if apellido2:
+        payload["apellido2"] = apellido2
+
+    data, err = _post_json_externo(PREVISORA_URLPAGO, payload)
+    if err:
+        # Adjuntar el correo usado y el payload al error para evidenciar que SÍ
+        # se envió un correo aleatorio del pool, aunque el servicio externo falle.
+        if isinstance(getattr(err, 'data', None), dict):
+            err.data['correo_usado'] = correo
+            err.data['payload'] = payload
+        return err
+
+    if correo_obj:
+        correo_obj.registrar_uso()
+
+    return Response({"data": data, "correo_usado": correo, "payload": payload}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('tramites', 'view')])
+def generar_link_mundial(request):
+    """
+    Genera un link de pago de Mundial para un trámite.
+    Toma un correo aleatorio del pool (o el provisto en `email`).
+    """
+    placa = request.data.get('placa')
+    nro_documento = request.data.get('nro_documento') or request.data.get('documento') or request.data.get('numero_documento')
+    if not placa or not nro_documento:
+        return Response({"error": "Los campos placa y nro_documento son requeridos."}, status=status.HTTP_400_BAD_REQUEST)
+
+    correo, correo_obj, err = _resolver_correo(request)
+    if err:
+        return err
+
+    payload = {
+        "placa": placa,
+        "tipo_documento": request.data.get('tipo_documento', 'CC'),
+        "nro_documento": nro_documento,
+        "telefono": request.data.get('telefono', ''),
+        "email": correo,
+    }
+
+    data, err = _post_json_externo(MUNDIAL_URL, payload)
+    if err:
+        # Adjuntar el correo usado y el payload al error para evidenciar que SÍ
+        # se envió un correo aleatorio del pool, aunque el servicio externo falle.
+        if isinstance(getattr(err, 'data', None), dict):
+            err.data['correo_usado'] = correo
+            err.data['payload'] = payload
+        return err
+
+    if correo_obj:
+        correo_obj.registrar_uso()
+
+    return Response({"data": data, "correo_usado": correo, "payload": payload}, status=status.HTTP_200_OK)

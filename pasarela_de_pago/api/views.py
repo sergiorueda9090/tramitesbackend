@@ -50,6 +50,8 @@ def serialize_pasarela(pasarela):
         'tipo_tramite_display': pasarela.get_tipo_tramite_display(),
         'tipo_vehiculo': pasarela.tipo_vehiculo,
         'tipo_vehiculo_display': pasarela.get_tipo_vehiculo_display() if pasarela.tipo_vehiculo else '',
+        'entidad': pasarela.entidad,
+        'entidad_display': pasarela.get_entidad_display() if pasarela.entidad else '',
 
         'grupo_soat': pasarela.grupo_soat,
         'grupo_soat_display': pasarela.get_grupo_soat_display() if pasarela.grupo_soat else '',
@@ -127,6 +129,7 @@ def create_pasarela(request):
 
             tipo_tramite=request.data.get('tipo_tramite', 'SOAT') or 'SOAT',
             tipo_vehiculo=request.data.get('tipo_vehiculo', '') or '',
+            entidad=request.data.get('entidad', '') or '',
 
             grupo_soat=request.data.get('grupo_soat', '') or '',
             grupo_clase_runt=request.data.get('grupo_clase_runt', '') or '',

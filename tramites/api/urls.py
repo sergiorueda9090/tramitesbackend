@@ -16,4 +16,8 @@ urlpatterns = [
     # Transiciones de estado
     path('<int:pk>/cambiar-estado/',  views.cambiar_estado,   name='cambiar_estado_tramite'),
     path('<int:pk>/revertir-estado/', views.revertir_estado,  name='revertir_estado_tramite'),
+
+    # Generadores de links de pago (usan un correo aleatorio del pool)
+    path('generar-link/previsora/', views.generar_link_previsora, name='generar_link_previsora'),
+    path('generar-link/mundial/',   views.generar_link_mundial,   name='generar_link_mundial'),
 ]

@@ -17,4 +17,8 @@ urlpatterns = [
     path('<int:pk>/pdfs/<int:pdf_pk>/update/',   views.update_pdf,   name='update_pdf_finalizado'),
     path('<int:pk>/pdfs/<int:pdf_pk>/delete/',   views.delete_pdf,   name='delete_pdf_finalizado'),
     path('<int:pk>/pdfs/<int:pdf_pk>/download/', views.download_pdf, name='download_pdf_finalizado'),
+
+    # Descarga automática del PDF por aseguradora (ventana de 5 min)
+    path('<int:pk>/pdfs/descargar/previsora/', views.descargar_pdf_previsora, name='descargar_pdf_previsora'),
+    path('<int:pk>/pdfs/descargar/mundial/',   views.descargar_pdf_mundial,   name='descargar_pdf_mundial'),
 ]

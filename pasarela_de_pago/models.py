@@ -33,6 +33,15 @@ TIPO_VEHICULO_CHOICES = [
     ('CERO_KM', 'Cero Kilómetros'),
 ]
 
+# Aseguradora / entidad (snapshot del trámite). Replicado a propósito para
+# mantener independencia del app de tramites.
+ENTIDAD_CHOICES = [
+    ('MUNDIAL', 'Mundial'),
+    ('PREVISORA', 'Previsora'),
+    ('SOLIDARIA', 'Solidaria'),
+    ('MANUAL', 'Manual'),
+]
+
 # Estado del pago confirmado por el operario en el modal de timer (3 min).
 # 'pendiente' es el estado inicial al crear la pasarela desde Trámites: el registro
 # ya es visible en el listado pero el operario todavía no ha confirmado el resultado
@@ -78,6 +87,7 @@ class PasarelaPago(models.Model):
     # Tipo de trámite (snapshot)
     tipo_tramite  = models.CharField(max_length=20, choices=TIPO_TRAMITE_CHOICES, default='SOAT')
     tipo_vehiculo = models.CharField(max_length=10, choices=TIPO_VEHICULO_CHOICES, blank=True, default='')
+    entidad       = models.CharField(max_length=20, choices=ENTIDAD_CHOICES, blank=True, default='', help_text='Aseguradora (snapshot del trámite)')
 
     # Resolución del árbol Grupo SOAT → Módulo → Tarifa (snapshot)
     grupo_soat          = models.CharField(max_length=20, choices=GRUPO_SOAT_CHOICES, blank=True, default='')

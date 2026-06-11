@@ -26,7 +26,9 @@ python manage.py test [app_name]                        # See "Tests" note below
 
 ### App count and registration
 
-25 feature apps in `INSTALLED_APPS` (`backend/settings.py:43–80`). The root `CLAUDE.md` lists them; do not maintain a duplicate table here. Two recently added apps — **`plan_de_cuentas`** and **`sub_cuentas`** — were registered after the module-permission migrations, so they have **no `Module` row** yet and cannot be gated with `ModulePermission` until a new `users/migrations/0015_add_*` migration is added.
+28 feature apps in `INSTALLED_APPS` (`backend/settings.py:50–90`). The root `CLAUDE.md` lists them; do not maintain a duplicate table here. All gated apps now have a `Module` row — module migrations run through `0019` (`plan_de_cuentas`/`sub_cuentas`/`movimiento_contable` added by `0015`–`0017`; `correos_aleatorios`/`cotizador_rapido` by `0018`–`0019`).
+
+Note: `tramitesbackend/cotizador_rapidosdasdasd/` is an abandoned scratch dir — not in `INSTALLED_APPS`, not routed. Ignore it.
 
 ### Per-app structure
 
@@ -43,7 +45,7 @@ python manage.py test [app_name]                        # See "Tests" note below
 
 ### View pattern (function-based, no DRF serializers)
 
-Views are `@api_view`-decorated functions that read `request.data` directly, validate inline, build the response dict through a local `serialize_<model>(obj)` helper, and return `Response(...)`. There is no `ModelViewSet`, no `GenericAPIView`, no `Serializer.is_valid()` machinery in 24 of the 25 apps. Implication: **adding or renaming a field requires three coordinated edits in the same app** — the model, the `serialize_<model>()` helper, and every `create_*` / `update_*` / `*_history` view that mentions the field by name. Missing any one of these silently breaks the API response shape without raising.
+Views are `@api_view`-decorated functions that read `request.data` directly, validate inline, build the response dict through a local `serialize_<model>(obj)` helper, and return `Response(...)`. There is no `ModelViewSet`, no `GenericAPIView`, no `Serializer.is_valid()` machinery in all but one app (`users`, below). Implication: **adding or renaming a field requires three coordinated edits in the same app** — the model, the `serialize_<model>()` helper, and every `create_*` / `update_*` / `*_history` view that mentions the field by name. Missing any one of these silently breaks the API response shape without raising.
 
 The standard endpoint suite per app (root CLAUDE.md documents them) maps onto these function names by convention: `list_*`, `create_*`, `get_*_by_id`, `update_*`, `delete_*` (soft), `restore_*`, `hard_delete_*`, `history_*`.
 
@@ -68,9 +70,9 @@ def create_cliente(request):
 
 - `RolePermission` (defined identically in each app's `api/permissions.py` — duplicated code, not imported from a single source) gates by `User.role` ∈ {`SuperAdmin`, `admin`, `auxiliar`, `vendedor`, `contador`, `cliente`}.
 - `ModulePermission(module_code, action)` is defined in `users/api/permissions.py` and **re-exported by every other app's `api/permissions.py`** (`from users.api.permissions import ModulePermission`). It looks up `UserModulePermission(user, module__code=module_code).can_<action>`. **`SuperAdmin` bypasses this check entirely** (`users/api/permissions.py:32`).
-- Module registry is seeded by `users/migrations/0006_populate_modules.py` (16 codes) and extended by migrations `0007`–`0014` (8 more codes → 24 total). Three of those 24 (`dashboard`, `reportes`, `configuracion`) are frontend-only and have no corresponding Django app. The Django apps `api_app` and `base_de_datos` have no `Module` row — they're internal/utility and not gated.
+- Module registry is seeded by `users/migrations/0006_populate_modules.py` (16 codes) and extended by migrations `0007`–`0019` (→ 29 total). Three of those (`dashboard`, `reportes`, `configuracion`) are frontend-only and have no corresponding Django app. The Django apps `api_app` and `base_de_datos` have no `Module` row — they're internal/utility and not gated.
 
-When adding a new gated feature: add a `0015_add_<code>_module.py` migration that does `Module.objects.create(name=..., code=...)`, then reference it from the view with `ModulePermission('<code>', '<action>')`. See `aplicar_permisos.md` at the project root for shell recipes.
+When adding a new gated feature: add a `0020_add_<code>_module.py` migration (next in sequence) that does `Module.objects.create(name=..., code=...)`, then reference it from the view with `ModulePermission('<code>', '<action>')`. See `aplicar_permisos.md` at the project root for shell recipes.
 
 ### Common model mixins
 

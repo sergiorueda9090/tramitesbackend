@@ -33,6 +33,13 @@ TIPO_VEHICULO_CHOICES = [
     ('CERO_KM', 'Cero Kilómetros'),
 ]
 
+ENTIDAD_CHOICES = [
+    ('MUNDIAL', 'Mundial'),
+    ('PREVISORA', 'Previsora'),
+    ('SOLIDARIA', 'Solidaria'),
+    ('MANUAL', 'Manual'),
+]
+
 GRUPO_SOAT_CHOICES = [
     ('MOTOS', 'Motos'),
     ('MOTOCARROS', 'Motocarros'),
@@ -99,6 +106,7 @@ class TramiteFinalizado(models.Model):
     # Tipo de trámite (snapshot)
     tipo_tramite  = models.CharField(max_length=20, choices=TIPO_TRAMITE_CHOICES, default='SOAT')
     tipo_vehiculo = models.CharField(max_length=10, choices=TIPO_VEHICULO_CHOICES, blank=True, default='')
+    entidad       = models.CharField(max_length=20, choices=ENTIDAD_CHOICES, blank=True, default='', help_text='Aseguradora (snapshot)')
 
     # Resolución del árbol Grupo SOAT (snapshot)
     grupo_soat          = models.CharField(max_length=20, choices=GRUPO_SOAT_CHOICES, blank=True, default='')
