@@ -91,9 +91,9 @@ def create_cargo_no_registrado(request):
 
     Un cargo no registrado representa una deuda que aumenta para el cliente.
 
-    Asiento:
+    Asiento (las sub-cuentas se derivan automaticamente, no se envian en el payload):
       - Debito  -> cliente.sub_cuenta  (cuenta por cobrar del cliente sube).
-      - Credito -> cargo.sub_cuenta    (contraparte del cargo, ej. ingresos).
+      - Credito -> tarjeta.sub_cuenta  (contraparte del cargo).
       - Valor   -> cargo.total         (valor + 4x1000).
     """
     try:
@@ -133,7 +133,7 @@ def create_cargo_no_registrado(request):
 
         tarjeta_id = request.data.get('tarjeta')
         try:
-            tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+            tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
             if tarjeta.deleted_at is not None:
                 return Response(
                     {"error": "La tarjeta especificada está eliminada."},
@@ -145,6 +145,18 @@ def create_cargo_no_registrado(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if tarjeta.sub_cuenta_id == cliente.sub_cuenta_id:
+            return Response(
+                {"error": "La sub-cuenta de la tarjeta (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         valor = Decimal(request.data.get('valor'))
         if valor <= 0:
             return Response(
@@ -154,15 +166,8 @@ def create_cargo_no_registrado(request):
         cuatro_por_mil = calcular_cuatro_por_mil(valor, tarjeta)
         total = valor + cuatro_por_mil
 
-        sub_cuenta_credito, error_response = _validar_sub_cuenta(request.data.get('sub_cuenta'))
-        if error_response:
-            return error_response
-
-        if sub_cuenta_credito.pk == cliente.sub_cuenta_id:
-            return Response(
-                {"error": "La sub-cuenta del cargo (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # La sub-cuenta de credito se deriva siempre de la tarjeta.
+        sub_cuenta_credito = tarjeta.sub_cuenta
 
         try:
             with transaction.atomic():
@@ -347,11 +352,16 @@ def get_cargo_no_registrado(request, pk):
 def update_cargo_no_registrado(request, pk):
     """Actualizar un cargo no registrado.
 
+    Las sub-cuentas se derivan automaticamente:
+      - cliente.sub_cuenta -> lado debito.
+      - tarjeta.sub_cuenta -> lado credito (se copia tambien a cargo.sub_cuenta).
+    No se aceptan en el payload `sub_cuenta`, `debito` ni `credito`.
+
     Cualquier cambio revierte el asiento previo y registra uno nuevo (atomico).
     """
     try:
         cargo = get_object_or_404(
-            CargoNoRegistrado.objects.select_related('tarjeta', 'cliente', 'sub_cuenta'), pk=pk
+            CargoNoRegistrado.objects.select_related('tarjeta__sub_cuenta', 'cliente__sub_cuenta', 'sub_cuenta'), pk=pk
         )
 
         if 'cliente' in request.data:
@@ -374,7 +384,7 @@ def update_cargo_no_registrado(request, pk):
         if 'tarjeta' in request.data:
             tarjeta_id = request.data.get('tarjeta')
             try:
-                tarjeta = Tarjeta.objects.get(pk=tarjeta_id)
+                tarjeta = Tarjeta.objects.select_related('sub_cuenta').get(pk=tarjeta_id)
                 if tarjeta.deleted_at is not None:
                     return Response(
                         {"error": "La tarjeta especificada está eliminada."},
@@ -387,13 +397,13 @@ def update_cargo_no_registrado(request, pk):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        if 'sub_cuenta' in request.data:
-            sub_cuenta_credito, error_response = _validar_sub_cuenta(
-                request.data.get('sub_cuenta'), excluir_pk=cargo.pk
+        if tarjeta.sub_cuenta_id is None or tarjeta.sub_cuenta.is_deleted:
+            return Response(
+                {"error": "La tarjeta no tiene una sub-cuenta contable valida asignada."},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            if error_response:
-                return error_response
-            cargo.sub_cuenta = sub_cuenta_credito
+        # Sincronizar siempre la sub_cuenta del cargo con la de la tarjeta.
+        cargo.sub_cuenta = tarjeta.sub_cuenta
 
         cargo.valor = request.data.get('valor', cargo.valor)
         cargo.observacion = request.data.get('observacion', cargo.observacion)
@@ -419,7 +429,7 @@ def update_cargo_no_registrado(request, pk):
             )
         if cargo.sub_cuenta_id == cliente_actual.sub_cuenta_id:
             return Response(
-                {"error": "La sub-cuenta del cargo (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
+                {"error": "La sub-cuenta de la tarjeta (credito) no puede ser la misma que la sub-cuenta del cliente (debito)."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

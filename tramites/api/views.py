@@ -803,6 +803,14 @@ def _post_json_externo(url, payload, timeout=30):
     Si error_response no es None, el caller debe retornarlo directamente.
     """
     body = json.dumps(payload).encode('utf-8')
+    # DEBUG: imprime el curl equivalente del POST externo para poder reproducirlo.
+    curl_cmd = (
+        f"curl -X POST '{url}' "
+        f"-H 'Content-Type: application/json' "
+        f"-H 'Accept: application/json' "
+        f"-d '{json.dumps(payload, ensure_ascii=False)}'"
+    )
+    print(f"[GENERAR-LINK] curl equivalente:\n{curl_cmd}")
     try:
         req = urllib.request.Request(url, data=body, method='POST')
         req.add_header('Content-Type', 'application/json')
