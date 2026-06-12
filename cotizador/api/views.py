@@ -696,7 +696,7 @@ def external_placa_documento_runt(request):
     tipo_documento = request.query_params.get('tipo_documento', 'C')
 
     # Construir URL del servicio RUNT externo
-    url = f"http://130.94.110.27:8080/api/runt_vehiculo/{placa or ''}/{tipo_documento}/{numero_documento or ''}"
+    url = f"https://soat-scraper.qf4cjg.easypanel.host/api/runt_vehiculo/{placa or ''}/{tipo_documento}/{numero_documento or ''}"
 
     try:
         req = urllib.request.Request(url, method='GET')
@@ -778,7 +778,7 @@ def external_placa_runt(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    url = "http://130.94.110.27:8080/api/tarjeta_propiedad"
+    url = "https://soat-scraper.qf4cjg.easypanel.host/api/tarjeta_propiedad"
 
     try:
         imagen_bytes = imagen.read()
