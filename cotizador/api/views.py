@@ -679,10 +679,34 @@ def delete_pago(request, pk):
 APIS EXTERNAS PARA INTEGRACIÓN CON SISTEMAS DE TERCEROS (SIN AUTENTICACIÓN)
 Estas APIs permiten a sistemas externos consultar información de cotizadores sin necesidad de autenticación.
 """
+# El servicio RUNT externo espera el tipo de documento como código de 1 caracter
+# (C/D/E/N/P/Y/U/T). El frontend suele enviar el formato largo (CC, CE, NIT, PAS,
+# TI) o con puntos (C.C); este mapa normaliza esos casos al código de 1 caracter.
+_RUNT_TIPOS_VALIDOS = {'C', 'D', 'E', 'N', 'P', 'Y', 'U', 'T'}
+_RUNT_TIPO_DOC_MAP = {
+    'CC': 'C',   # Cédula de Ciudadanía
+    'CE': 'E',   # Cédula de Extranjería
+    'TI': 'T',   # Tarjeta de Identidad
+    'NIT': 'N',  # NIT
+    'PAS': 'P',  # Pasaporte
+    'PA': 'P',
+}
+
+
+def _normalizar_tipo_doc_runt(valor):
+    """Convierte el tipo de documento al código de 1 caracter que exige el RUNT."""
+    if not valor:
+        return 'C'
+    v = str(valor).strip().upper().replace('.', '')   # "C.C" -> "CC"
+    if v in _RUNT_TIPOS_VALIDOS:
+        return v
+    return _RUNT_TIPO_DOC_MAP.get(v, v[:1] or 'C')
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('cotizador', 'view')])
 def external_placa_documento_runt(request):
-    
+
     placa            = request.query_params.get('placa', None)
     numero_documento = request.query_params.get('numero_documento', None)
     tipo_documento   = request.query_params.get('tipo_documento', 'C')
@@ -693,7 +717,8 @@ def external_placa_documento_runt(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    tipo_documento = request.query_params.get('tipo_documento', 'C')
+    # Normalizar al código de 1 caracter que exige el RUNT (CC -> C, etc.).
+    tipo_documento = _normalizar_tipo_doc_runt(request.query_params.get('tipo_documento', 'C'))
 
     # Construir URL del servicio RUNT externo
     url = f"https://soat-scraper.qf4cjg.easypanel.host/api/runt_vehiculo/{placa or ''}/{tipo_documento}/{numero_documento or ''}"

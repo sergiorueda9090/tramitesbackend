@@ -112,6 +112,9 @@ def create_tramite(request):
 
     Solo `cliente` es obligatorio. Los demás campos son opcionales para permitir
     guardado desde el flujo del Cotizador (Step 7) al presionar "Enviar a Trámites".
+
+    Dispara `tramite_added_event` para que el listado de Trámites se refresque en
+    tiempo real en el resto de sesiones que lo estén viendo.
     """
     try:
         if not request.data.get('cliente'):
@@ -164,6 +167,18 @@ def create_tramite(request):
             correo=request.data.get('correo', '') or '',
             direccion=request.data.get('direccion', '') or '',
         )
+
+        # Broadcast WS: el listado de Trámites se refresca en tiempo real en
+        # cualquier otra sesión que lo esté viendo (ej. envío desde el Cotizador).
+        try:
+            from users.realtime import notify_view_sync
+            notify_view_sync(
+                view_id='tramites_list',
+                event_type='tramite_added_event',
+                payload={'tramite_id': tramite.id, 'reason': 'created'},
+            )
+        except Exception as e:
+            print(f"WARNING: notify_view_sync fallo: {e}")
 
         return Response(serialize_tramite(tramite), status=status.HTTP_201_CREATED)
 
