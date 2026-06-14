@@ -42,7 +42,7 @@ def _emit(job, event_type):
         print(f'WARNING: notify_view_sync (_emit) fallo: {e}')
 
 
-@shared_task(bind=True, acks_late=True, max_retries=3, default_retry_delay=20)
+@shared_task(bind=True, acks_late=True, max_retries=0, default_retry_delay=20)
 def generar_link_pago(self, job_id):
     try:
         job = LinkPagoJob.objects.select_related('tramite').get(pk=job_id)
