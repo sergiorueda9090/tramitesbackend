@@ -395,6 +395,24 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             'reason': event.get('reason', ''),
         }))
 
+    async def link_pago_started_event(self, event):
+        """La generación asíncrona del link de pago de un tramite empezó."""
+        await self.send(text_data=json.dumps({
+            'type': 'link_pago_started',
+            'view_id': 'tramites_list',
+            'tramite_id': event.get('tramite_id'),
+            'link_pago': event.get('link_pago'),
+        }))
+
+    async def link_pago_done_event(self, event):
+        """La generación del link de pago terminó (exitoso o error)."""
+        await self.send(text_data=json.dumps({
+            'type': 'link_pago_done',
+            'view_id': 'tramites_list',
+            'tramite_id': event.get('tramite_id'),
+            'link_pago': event.get('link_pago'),
+        }))
+
     async def pasarela_added_event(self, event):
         """Notifica que un nuevo registro de pasarela debe aparecer."""
         await self.send(text_data=json.dumps({

@@ -151,6 +151,8 @@ class TramiteFinalizado(models.Model):
 
     # Datos del cierre
     observacion         = models.TextField(blank=True, default='', help_text='Observación capturada en el modal de timer al confirmar el pago')
+    comprobante_pago    = models.URLField(max_length=1000, blank=True, default='', help_text='URL del comprobante de pago en S3 (snapshot de la pasarela)')
+    link_pago           = models.URLField(max_length=1000, blank=True, default='', help_text='Link de pago (Previsora/Mundial) generado para el trámite (snapshot)')
     pago_confirmado_at  = models.DateTimeField(default=timezone.now, help_text='Sello del momento exacto en que se confirmó el pago')
 
     # Snapshot del 4x1000 al momento del cierre.

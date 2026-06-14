@@ -20,4 +20,7 @@ urlpatterns = [
     # Generadores de links de pago (usan un correo aleatorio del pool)
     path('generar-link/previsora/', views.generar_link_previsora, name='generar_link_previsora'),
     path('generar-link/mundial/',   views.generar_link_mundial,   name='generar_link_mundial'),
+
+    # Reintento de la generación automática (asíncrona) del link de pago
+    path('<int:pk>/link-pago/reintentar/', views.reintentar_link_pago, name='reintentar_link_pago'),
 ]

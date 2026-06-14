@@ -137,3 +137,56 @@ class Tramite(models.Model):
     def restore(self):
         self.deleted_at = None
         self.save()
+
+
+# ==================== GENERACIÓN AUTOMÁTICA DE LINK DE PAGO ====================
+# Cuando un trámite se crea (ej. enviado desde el Cotizador), se encola una tarea
+# Celery que llama al generador externo (Previsora / Mundial) de forma asíncrona.
+# El estado vive en BD (esta tabla), no en memoria ni en el navegador: aunque el
+# usuario recargue o el worker se reinicie, el estado persiste y se recupera.
+
+LINK_PAGO_ESTADOS = [
+    ('pendiente',  'Pendiente'),
+    ('en_proceso', 'En proceso'),
+    ('exitoso',    'Exitoso'),
+    ('error',      'Error'),
+]
+
+LINK_PAGO_PROVEEDORES = [
+    ('previsora', 'Previsora'),
+    ('mundial',   'Mundial'),
+]
+
+
+class LinkPagoJob(models.Model):
+    # OneToOne: un trámite genera UN link. Si en el futuro se necesitan varios
+    # proveedores por trámite, cambiar a ForeignKey + unique_together.
+    tramite       = models.OneToOneField(
+        Tramite, on_delete=models.CASCADE, related_name='link_pago_job'
+    )
+    proveedor     = models.CharField(max_length=20, choices=LINK_PAGO_PROVEEDORES, blank=True, default='')
+    estado        = models.CharField(max_length=20, choices=LINK_PAGO_ESTADOS, default='pendiente')
+
+    url_pago      = models.TextField(blank=True, default='')
+    correo_usado  = models.CharField(max_length=255, blank=True, default='')
+
+    payload_enviado = models.JSONField(null=True, blank=True)   # auditoría
+    respuesta_cruda = models.JSONField(null=True, blank=True)   # respuesta del tercero
+    error_mensaje   = models.TextField(blank=True, default='')
+
+    intentos      = models.PositiveIntegerField(default=0)
+    task_id       = models.CharField(max_length=60, blank=True, default='')  # id de la tarea Celery
+
+    created_at    = models.DateTimeField(auto_now_add=True)
+    updated_at    = models.DateTimeField(auto_now=True)
+
+    history = HistoricalRecords()
+
+    class Meta:
+        db_table = 'tramites_link_pago_job'
+        ordering = ['-created_at']
+        verbose_name = 'Job de link de pago'
+        verbose_name_plural = 'Jobs de link de pago'
+
+    def __str__(self):
+        return f'LinkPagoJob tramite={self.tramite_id} {self.proveedor} {self.estado}'

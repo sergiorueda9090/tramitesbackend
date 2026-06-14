@@ -11,6 +11,9 @@ urlpatterns = [
     path('<int:pk>/hard-delete/',   views.hard_delete_finalizado, name='hard_delete_finalizado'),
     path('<int:pk>/history/',       views.finalizado_history,     name='finalizado_history'),
 
+    # URL prefirmada (temporal) para visualizar el comprobante de pago en S3
+    path('<int:pk>/comprobante-url/', views.comprobante_url_finalizado, name='comprobante_url_finalizado'),
+
     # PDFs adjuntos (uno o varios por finalizado)
     path('<int:pk>/pdfs/',                       views.list_pdfs,    name='list_pdfs_finalizado'),
     path('<int:pk>/pdfs/upload/',                views.upload_pdfs,  name='upload_pdfs_finalizado'),

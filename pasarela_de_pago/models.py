@@ -133,6 +133,17 @@ class PasarelaPago(models.Model):
     # Observación opcional capturada en el modal de timer (3 min) al enviar desde Trámites
     observacion = models.TextField(blank=True, default='', help_text='Notas opcionales del usuario al confirmar el pago')
 
+    # Comprobante de pago (imagen). OBLIGATORIO para marcar el pago como 'exitoso'
+    # (se sube en el PagoTimerDialog arrastrando o pegando la imagen). El archivo
+    # se almacena en S3 (bucket AWS_S3_COMPROBANTES_BUCKET) y aquí se guarda la URL.
+    comprobante_pago = models.URLField(
+        max_length=1000, blank=True, default='',
+        help_text='URL del comprobante de pago en S3; requerida para marcar el pago exitoso',
+    )
+
+    # Snapshot del link de pago (Previsora/Mundial) generado para el trámite origen.
+    link_pago = models.URLField(max_length=1000, blank=True, default='', help_text='Link de pago generado para el trámite (snapshot)')
+
     # Estado del pago real (pasarela externa). 'pendiente' = el registro se creó pero
     # el operario aún no confirmó el resultado en el modal de timer.
     pago_estado     = models.CharField(max_length=20, choices=PAGO_ESTADO_CHOICES, default='pendiente')

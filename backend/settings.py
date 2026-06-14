@@ -213,11 +213,21 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # se sobreescriben por .env. Si las credenciales faltan, boto3 intenta la cadena
 # de credenciales por defecto (perfil/instancia).
 AWS_S3_BUCKET         = os.getenv('AWS_S3_BUCKET', 'documentospdfmovilidad')
-AWS_S3_REGION         = os.getenv('AWS_S3_REGION', 'us-east-1')
+AWS_S3_REGION         = os.getenv('AWS_S3_REGION') or os.getenv('AWS_S3_REGION_NAME', 'us-east-1')
 AWS_ACCESS_KEY_ID     = os.getenv('AWS_ACCESS_KEY_ID', '')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', '')
 # Prefijo (carpeta) dentro del bucket donde el correo automático deja los PDFs de Mundial.
 AWS_S3_MUNDIAL_PREFIX = os.getenv('AWS_S3_MUNDIAL_PREFIX', 'mundial/')
+
+# Bucket S3 para los comprobantes de pago de pasarela_de_pago (imagen que el
+# operario sube al marcar el pago como exitoso). Reutiliza AWS_ACCESS_KEY_ID/
+# SECRET/REGION. La URL del objeto se guarda en PasarelaPago.comprobante_pago.
+# Lee primero el nombre dedicado; si no, cae al AWS_STORAGE_BUCKET_NAME del .env.
+AWS_S3_COMPROBANTES_BUCKET = (
+    os.getenv('AWS_S3_COMPROBANTES_BUCKET')
+    or os.getenv('AWS_STORAGE_BUCKET_NAME', 'movilidad2comprobantepago')
+)
+AWS_S3_COMPROBANTES_PREFIX = os.getenv('AWS_S3_COMPROBANTES_PREFIX', 'comprobantes/')
 
 # Limites de upload (15 MB por archivo, 80 MB por request)
 DATA_UPLOAD_MAX_MEMORY_SIZE = 80 * 1024 * 1024
@@ -244,8 +254,36 @@ CHANNEL_LAYERS = {
         "CONFIG": {
             "hosts": [(
                 os.getenv('REDIS_HOST', '127.0.0.1'),
-                int(os.getenv('REDIS_PORT', '6381')), #6381 Pro - 6379 local
+                int(os.getenv('REDIS_PORT', '6379')), #6381 Pro - 6379 local
             )],
         },
+    },
+}
+
+# ==================== CELERY (generación asíncrona de links de pago) ====================
+# Reutiliza el MISMO Redis que Channels (mismas variables REDIS_HOST/REDIS_PORT),
+# pero en índices de BD distintos (/1 broker, /2 resultados) para no mezclar las
+# colas de Celery con las claves de presencia/cell-presence de Channels.
+# En producción, define REDIS_HOST/REDIS_PORT en .env (igual que ya haces para
+# Channels) y ambos apuntarán al mismo servidor automáticamente.
+REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))  # mismo default que CHANNEL_LAYERS
+
+CELERY_BROKER_URL        = os.getenv('CELERY_BROKER_URL',    f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
+CELERY_RESULT_BACKEND    = os.getenv('CELERY_RESULT_BACKEND', f'redis://{REDIS_HOST}:{REDIS_PORT}/2')
+CELERY_TASK_SERIALIZER   = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT    = ['json']
+CELERY_TIMEZONE          = TIME_ZONE
+CELERY_TASK_ACKS_LATE    = True          # no perder tareas si el worker muere a mitad
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1    # reparte equitativo, evita acaparar
+CELERY_TASK_DEFAULT_RATE_LIMIT = '60/m'  # tope de salida hacia el tercero (ajustable)
+
+# Catch-up periódico: re-encola jobs de link de pago colgados (pendiente/en_proceso
+# que llevan rato sin avanzar). Garantía dura de "no se pierde ninguno".
+CELERY_BEAT_SCHEDULE = {
+    'reencolar-links-colgados': {
+        'task': 'tramites.tasks.reencolar_jobs_colgados',
+        'schedule': 120.0,   # cada 2 minutos
     },
 }

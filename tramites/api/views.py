@@ -102,6 +102,24 @@ def serialize_tramite(tramite):
         'created_at': tramite.created_at,
         'updated_at': tramite.updated_at,
         'deleted_at': tramite.deleted_at,
+
+        # Estado de la generación automática del link de pago (job asíncrono).
+        # None si el trámite todavía no tiene job (ej. creado sin placa/documento).
+        'link_pago': _serialize_link_pago(getattr(tramite, 'link_pago_job', None)),
+    }
+
+
+def _serialize_link_pago(job):
+    """Resumen del LinkPagoJob para el listado/detalle de Trámites."""
+    if job is None:
+        return None
+    return {
+        'estado': job.estado,
+        'proveedor': job.proveedor,
+        'url_pago': job.url_pago,
+        'correo_usado': job.correo_usado,
+        'error_mensaje': job.error_mensaje,
+        'intentos': job.intentos,
     }
 
 
@@ -167,6 +185,22 @@ def create_tramite(request):
             correo=request.data.get('correo', '') or '',
             direccion=request.data.get('direccion', '') or '',
         )
+
+        # IMPORTANTE: crear el LinkPagoJob y encolar ANTES de emitir
+        # `tramite_added_event`. Así, cuando las otras sesiones reciban el evento
+        # y traigan el trámite (GET), el `link_pago` ya existe (estado 'pendiente')
+        # y la columna muestra "Generando…" de inmediato. Si se emitiera primero,
+        # el GET podría llegar antes de crear el job y la fila saldría con "—".
+        # El delay() solo escribe en Redis y NO espera: el create responde rápido.
+        # Guard: solo si hay datos mínimos para generar el link.
+        if (tramite.placa or '').strip() and (tramite.numero_documento or '').strip():
+            try:
+                from tramites.models import LinkPagoJob
+                from tramites.tasks import generar_link_pago
+                job, _ = LinkPagoJob.objects.get_or_create(tramite=tramite)  # idempotente
+                generar_link_pago.delay(job.id)
+            except Exception as e:
+                print(f"WARNING: no se pudo encolar generar_link_pago: {e}")
 
         # Broadcast WS: el listado de Trámites se refresca en tiempo real en
         # cualquier otra sesión que lo esté viendo (ej. envío desde el Cotizador).
@@ -304,7 +338,8 @@ def list_tramites(request):
     """Listar trámites con filtros y paginación"""
     try:
         tramites = Tramite.objects.select_related(
-            'usuario', 'cliente', 'etiqueta', 'precio_cliente', 'tarifario_soat'
+            'usuario', 'cliente', 'etiqueta', 'precio_cliente', 'tarifario_soat',
+            'link_pago_job',
         ).all()
 
         # Excluir trámites que ya fueron enviados a pasarela (con una pasarela activa,
@@ -427,7 +462,7 @@ def get_tramite(request, pk):
     """Obtener un trámite por ID"""
     try:
         tramite = get_object_or_404(
-            Tramite.objects.select_related('usuario', 'cliente', 'etiqueta', 'precio_cliente', 'tarifario_soat'),
+            Tramite.objects.select_related('usuario', 'cliente', 'etiqueta', 'precio_cliente', 'tarifario_soat', 'link_pago_job'),
             pk=pk
         )
         return Response(serialize_tramite(tramite), status=status.HTTP_200_OK)
@@ -786,13 +821,13 @@ def _formatear_token(valor):
 
 
 def _obtener_correo_aleatorio():
-    """Devuelve un CorreoAleatorio activo (no eliminado) al azar, o None."""
-    return (
-        CorreoAleatorio.objects
-        .filter(activo=True, deleted_at__isnull=True)
-        .order_by('?')
-        .first()
-    )
+    """Devuelve un CorreoAleatorio activo (no eliminado) al azar, o None.
+
+    Delega en el servicio, que selecciona por PK aleatorio (rápido) en vez de
+    ORDER BY RAND() — crítico con cientos de miles de correos en el pool.
+    """
+    from ..services.generar_link import obtener_correo_aleatorio
+    return obtener_correo_aleatorio()
 
 
 def _resolver_correo(request):
@@ -868,22 +903,18 @@ def generar_link_previsora(request):
     if err:
         return err
 
+    # Previsora espera SOLO `nombre` y `apellido` (NO nombre2/apellido2), en
+    # MINÚSCULAS: el primer nombre y el primer apellido. El dialog puede seguir
+    # enviando los campos separados; aquí solo se usan `nombre` y `apellido`.
     payload = {
         "placa": placa,
         "tipodocumento": request.data.get('tipodocumento', 1),
         "documento": documento,
-        "nombre": _formatear_token(request.data.get('nombre', '')),
-        "apellido": _formatear_token(request.data.get('apellido', '')),
+        "nombre": _formatear_token(request.data.get('nombre', '')).lower(),
+        "apellido": _formatear_token(request.data.get('apellido', '')).lower(),
         "telefono": request.data.get('telefono', ''),
         "correo": correo,
     }
-    # Campos opcionales: solo se incluyen si vienen con valor.
-    nombre2 = _formatear_token(request.data.get('nombre2', ''))
-    if nombre2:
-        payload["nombre2"] = nombre2
-    apellido2 = _formatear_token(request.data.get('apellido2', ''))
-    if apellido2:
-        payload["apellido2"] = apellido2
 
     data, err = _post_json_externo(PREVISORA_URLPAGO, payload)
     if err:
@@ -898,6 +929,28 @@ def generar_link_previsora(request):
         correo_obj.registrar_uso()
 
     return Response({"data": data, "correo_usado": correo, "payload": payload}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin', 'vendedor']), ModulePermission('tramites', 'edit')])
+def reintentar_link_pago(request, pk):
+    """
+    Re-encola la generación del link de pago de un trámite (botón "Reintentar"
+    cuando el job quedó en estado 'error'). Devuelve 202 (encolado) o 409 si ya
+    está en proceso.
+    """
+    from tramites.models import LinkPagoJob
+    from tramites.tasks import generar_link_pago
+
+    job = get_object_or_404(LinkPagoJob.objects, tramite_id=pk)
+    if job.estado == 'en_proceso':
+        return Response({"error": "El link ya está en proceso."}, status=status.HTTP_409_CONFLICT)
+
+    job.estado = 'pendiente'
+    job.error_mensaje = ''
+    job.save(update_fields=['estado', 'error_mensaje', 'updated_at'])
+    generar_link_pago.delay(job.id)
+    return Response({"message": "Reintento encolado."}, status=status.HTTP_202_ACCEPTED)
 
 
 @api_view(['POST'])

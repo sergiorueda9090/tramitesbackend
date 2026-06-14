@@ -122,6 +122,8 @@ def serialize_finalizado(t):
         'cargar_pdf_estado': t.cargar_pdf_estado,
 
         'observacion': t.observacion,
+        'comprobante_pago': t.comprobante_pago or None,
+        'link_pago': t.link_pago or None,
         'pago_confirmado_at': t.pago_confirmado_at,
         # Ventana de descarga automática del PDF (5 min desde el pago).
         'pdf_descarga_hasta': _pdf_descarga_deadline(t),
@@ -179,62 +181,13 @@ def crear_desde_pasarela(request):
             except Tarjeta.DoesNotExist:
                 pass  # caemos a la tarjeta existente
 
-        # Snapshot del 4x1000 al momento del cierre.
-        aplica_4x1000 = bool(tarjeta_final and tarjeta_final.cuatro_por_mil == '1')
-        base = (pasarela.precio_lay or Decimal('0')) + (pasarela.comision or Decimal('0'))
-        cuatro_por_mil_valor = (base * Decimal('4') / Decimal('1000')) if aplica_4x1000 else Decimal('0')
-
-        with transaction.atomic():
-            finalizado = TramiteFinalizado.objects.create(
-                pasarela=pasarela,
-                tramite_origen_id_snapshot=pasarela.tramite_origen_id,
-                usuario=pasarela.tramite_origen.usuario if pasarela.tramite_origen else pasarela.usuario,
-                usuario_que_confirma=request.user,
-                cliente=pasarela.cliente,
-                etiqueta=pasarela.etiqueta,
-                precio_cliente=pasarela.precio_cliente,
-                tarifario_soat=pasarela.tarifario_soat,
-                tarjeta=tarjeta_final,
-                tipo_tramite=pasarela.tipo_tramite,
-                tipo_vehiculo=pasarela.tipo_vehiculo,
-                entidad=pasarela.entidad,
-                grupo_soat=pasarela.grupo_soat,
-                grupo_clase_runt=pasarela.grupo_clase_runt,
-                grupo_subcriterio=pasarela.grupo_subcriterio,
-                modulo_pregunta1=pasarela.modulo_pregunta1,
-                modulo_pregunta2=pasarela.modulo_pregunta2,
-                tarifa_codigo=pasarela.tarifa_codigo,
-                tarifa_manual=pasarela.tarifa_manual,
-                precio_lay=pasarela.precio_lay,
-                comision=pasarela.comision,
-                placa=pasarela.placa,
-                clase=pasarela.clase,
-                tipo_servicio=pasarela.tipo_servicio,
-                marca=pasarela.marca,
-                linea=pasarela.linea,
-                modelo=pasarela.modelo,
-                color=pasarela.color,
-                cilindraje=pasarela.cilindraje,
-                pasajeros_sentados=pasarela.pasajeros_sentados,
-                capacidad_carga=pasarela.capacidad_carga,
-                peso_bruto=pasarela.peso_bruto,
-                chasis=pasarela.chasis,
-                vin=pasarela.vin,
-                tipo_documento=pasarela.tipo_documento,
-                numero_documento=pasarela.numero_documento,
-                nombre_completo=pasarela.nombre_completo,
-                telefono=pasarela.telefono,
-                correo=pasarela.correo,
-                direccion=pasarela.direccion,
-                tramite_estado=pasarela.tramite_estado,
-                confirmacion_estado=pasarela.confirmacion_estado,
-                cargar_pdf_estado=pasarela.cargar_pdf_estado,
-                observacion=observacion_override if observacion_override is not None else pasarela.observacion,
-                pago_confirmado_at=_tz.now(),
-                cuatro_por_mil_valor=cuatro_por_mil_valor,
-            )
-
-            pasarela.soft_delete()
+        from ..services import crear_finalizado_desde_pasarela
+        finalizado = crear_finalizado_desde_pasarela(
+            pasarela,
+            usuario_que_confirma=request.user,
+            observacion_override=observacion_override,
+            tarjeta_override=tarjeta_final,
+        )
 
         # Broadcasts: best-effort, no rompen el flujo si fallan.
         try:
@@ -258,6 +211,22 @@ def crear_desde_pasarela(request):
         return Response({"error": f"Error de base de datos: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
         return Response({"error": f"Error inesperado: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, ModulePermission('finalizados_tramites', 'view')])
+def comprobante_url_finalizado(request, pk):
+    """Devuelve una URL prefirmada (temporal, ~1h) para visualizar el comprobante
+    de pago del finalizado, almacenado en S3 (bucket privado)."""
+    finalizado = get_object_or_404(TramiteFinalizado.objects, pk=pk)
+    if not finalizado.comprobante_pago:
+        return Response({"error": "Este trámite finalizado no tiene comprobante de pago."}, status=status.HTTP_404_NOT_FOUND)
+
+    from pasarela_de_pago.services import generar_url_presignada
+    url, err = generar_url_presignada(finalizado.comprobante_pago)
+    if err:
+        return Response({"error": f"No se pudo generar la URL del comprobante: {err}"}, status=status.HTTP_502_BAD_GATEWAY)
+    return Response({"url": url}, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

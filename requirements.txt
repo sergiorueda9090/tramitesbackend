@@ -2,6 +2,9 @@ asgiref==3.11.0
 attrs==25.4.0
 boto3==1.43.20
 autobahn==25.12.2
+celery==5.4.0
+gevent==24.11.1
+flower==2.0.1
 Automat==25.4.16
 cbor2==5.8.0
 cffi==2.0.0

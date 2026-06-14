@@ -92,6 +92,8 @@ def serialize_pasarela(pasarela):
         'cargar_pdf_estado': pasarela.cargar_pdf_estado,
 
         'observacion': pasarela.observacion,
+        'comprobante_pago': pasarela.comprobante_pago or None,
+        'link_pago': pasarela.link_pago or None,
 
         'pago_estado': pasarela.pago_estado,
         'pago_estado_display': pasarela.get_pago_estado_display(),
@@ -164,6 +166,7 @@ def create_pasarela(request):
             direccion=request.data.get('direccion', '') or '',
 
             observacion=request.data.get('observacion', '') or '',
+            link_pago=request.data.get('link_pago', '') or '',
 
             pago_estado=request.data.get('pago_estado', 'pendiente') or 'pendiente',
         )
@@ -605,7 +608,28 @@ def confirmar_pago_pasarela(request, pk):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Comprobante de pago: OBLIGATORIO para marcar el pago como 'exitoso'.
+        # Se acepta el nuevo archivo subido o uno ya guardado previamente.
+        comprobante = request.FILES.get('comprobante_pago')
+        if pago_estado == 'exitoso' and not comprobante and not pasarela.comprobante_pago:
+            return Response(
+                {"error": "El comprobante de pago es obligatorio para marcar el pago como exitoso."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         pasarela.pago_estado = pago_estado
+
+        # Subir el comprobante a S3 y guardar su URL en la tabla. Si la subida
+        # falla, NO se marca el pago (se devuelve error para que el operario reintente).
+        if comprobante:
+            from ..services import subir_comprobante_a_s3
+            url_comprobante, err_s3 = subir_comprobante_a_s3(comprobante, pasarela.id)
+            if err_s3:
+                return Response(
+                    {"error": f"No se pudo subir el comprobante a S3: {err_s3}"},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+            pasarela.comprobante_pago = url_comprobante
 
         # Observación y tarjeta son opcionales: solo se actualizan si vienen.
         if 'observacion' in request.data:
@@ -617,8 +641,30 @@ def confirmar_pago_pasarela(request, pk):
         pasarela.pago_confirmado_at = _tz.now()
         pasarela.save()
 
-        # Broadcast a /ws/presence/: otras sesiones que vean la lista de
-        # pasarela_de_pago refrescarán el registro silenciosamente.
+        # PAGO EXITOSO → el trámite pasa DIRECTO a Trámites Finalizados y sale de
+        # Pasarela (sin paso manual). Se crea el snapshot y se soft-borra la pasarela.
+        if pago_estado == 'exitoso':
+            from finalizados_tramites.services import crear_finalizado_desde_pasarela
+            finalizado = crear_finalizado_desde_pasarela(pasarela, usuario_que_confirma=request.user)
+            try:
+                from users.realtime import notify_view_sync
+                # Sale de Pasarela...
+                notify_view_sync(
+                    view_id='pasarela_de_pago_list',
+                    event_type='pasarela_removed_event',
+                    payload={'pasarela_id': pasarela.id, 'reason': 'pago_exitoso_finalizado'},
+                )
+                # ...y aparece en Trámites Finalizados.
+                notify_view_sync(
+                    view_id='finalizados_tramites_list',
+                    event_type='finalizado_added_event',
+                    payload={'finalizado_id': finalizado.id, 'reason': 'pago_exitoso'},
+                )
+            except Exception as e:
+                print(f"WARNING: notify_view_sync fallo: {e}")
+            return Response(serialize_pasarela(pasarela), status=status.HTTP_200_OK)
+
+        # NO exitoso / pendiente → el registro permanece en Pasarela; solo se refresca.
         try:
             from users.realtime import notify_view_sync
             notify_view_sync(
