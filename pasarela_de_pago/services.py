@@ -61,6 +61,49 @@ def subir_comprobante_a_s3(archivo, pasarela_id):
     return url, None
 
 
+def obtener_objeto_s3(url_objeto):
+    """
+    Descarga un objeto privado de S3 dado su URL pública y devuelve
+    (body, content_type, error) para servirlo como proxy desde el backend.
+
+    A diferencia de `generar_url_presignada`, aquí las credenciales se usan
+    solo en el servidor: el cliente nunca ve la URL de S3 ni el Access Key ID.
+    `body` es un objeto file-like (StreamingBody de boto3) apto para FileResponse.
+    """
+    if not url_objeto:
+        return None, None, 'No hay URL de objeto.'
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+        from urllib.parse import urlparse, unquote
+    except ImportError:
+        return None, None, "Falta la dependencia 'boto3' en el backend."
+
+    p = urlparse(url_objeto)
+    # host: <bucket>.s3.<region>.amazonaws.com  → bucket = lo previo a '.s3'
+    bucket = p.netloc.split('.s3')[0]
+    key = unquote(p.path.lstrip('/'))
+    if not bucket or not key:
+        return None, None, 'URL de objeto S3 inválida.'
+
+    region = getattr(settings, 'AWS_S3_REGION', 'us-east-1') or 'us-east-1'
+    try:
+        s3 = boto3.client(
+            's3',
+            aws_access_key_id=getattr(settings, 'AWS_ACCESS_KEY_ID', '') or None,
+            aws_secret_access_key=getattr(settings, 'AWS_SECRET_ACCESS_KEY', '') or None,
+            region_name=region,
+        )
+        obj = s3.get_object(Bucket=bucket, Key=key)
+    except (BotoCoreError, ClientError) as e:
+        return None, None, str(e)
+    except Exception as e:
+        return None, None, f'Inesperado: {e}'
+
+    content_type = obj.get('ContentType') or 'application/octet-stream'
+    return obj['Body'], content_type, None
+
+
 def generar_url_presignada(url_objeto, expires=3600):
     """
     Genera una URL prefirmada (GET temporal) para un objeto S3 dado su URL

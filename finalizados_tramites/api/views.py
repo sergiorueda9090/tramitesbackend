@@ -231,6 +231,26 @@ def comprobante_url_finalizado(request, pk):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, ModulePermission('finalizados_tramites', 'view')])
+def comprobante_finalizado(request, pk):
+    """Proxy que entrega el comprobante de pago (imagen en S3 privado) haciendo
+    streaming desde el backend. El cliente no recibe ninguna credencial ni la
+    URL de S3: solo consume esta ruta autenticada con su JWT."""
+    finalizado = get_object_or_404(TramiteFinalizado.objects, pk=pk)
+    if not finalizado.comprobante_pago:
+        return Response({"error": "Este trámite finalizado no tiene comprobante de pago."}, status=status.HTTP_404_NOT_FOUND)
+
+    from pasarela_de_pago.services import obtener_objeto_s3
+    body, content_type, err = obtener_objeto_s3(finalizado.comprobante_pago)
+    if err:
+        return Response({"error": f"No se pudo obtener el comprobante: {err}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+    resp = FileResponse(body, content_type=content_type)
+    resp['Content-Disposition'] = 'inline'
+    return resp
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, ModulePermission('finalizados_tramites', 'view')])
 def list_finalizados(request):
     """Listar trámites finalizados con filtros y paginación"""
     try:

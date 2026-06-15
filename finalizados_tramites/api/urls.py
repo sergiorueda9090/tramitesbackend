@@ -14,6 +14,9 @@ urlpatterns = [
     # URL prefirmada (temporal) para visualizar el comprobante de pago en S3
     path('<int:pk>/comprobante-url/', views.comprobante_url_finalizado, name='comprobante_url_finalizado'),
 
+    # Proxy: el backend hace streaming de la imagen sin exponer credenciales ni la URL de S3
+    path('<int:pk>/comprobante/', views.comprobante_finalizado, name='comprobante_finalizado'),
+
     # PDFs adjuntos (uno o varios por finalizado)
     path('<int:pk>/pdfs/',                       views.list_pdfs,    name='list_pdfs_finalizado'),
     path('<int:pk>/pdfs/upload/',                views.upload_pdfs,  name='upload_pdfs_finalizado'),
