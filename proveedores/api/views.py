@@ -24,6 +24,7 @@ def serialize_proveedor(proveedor):
         'sub_cuenta': proveedor.sub_cuenta_id,
         'sub_cuenta_codigo': proveedor.sub_cuenta.codigo if proveedor.sub_cuenta else None,
         'sub_cuenta_nombre': proveedor.sub_cuenta.nombre_sub_cuenta if proveedor.sub_cuenta else None,
+        'protegido': proveedor.protegido,
         'created_at': proveedor.created_at,
         'updated_at': proveedor.updated_at,
         'deleted_at': proveedor.deleted_at,
@@ -177,6 +178,12 @@ def update_proveedor(request, pk):
     try:
         proveedor = get_object_or_404(Proveedor.objects, pk=pk)
 
+        if proveedor.protegido:
+            return Response(
+                {"error": "Este proveedor es del sistema y no se puede editar."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         proveedor.nombre = request.data.get('nombre', proveedor.nombre)
         proveedor.color = request.data.get('color', proveedor.color)
 
@@ -218,6 +225,11 @@ def delete_proveedor(request, pk):
     """Eliminar un proveedor (soft delete)"""
     try:
         proveedor = get_object_or_404(Proveedor.objects, pk=pk)
+        if proveedor.protegido:
+            return Response(
+                {"error": "Este proveedor es del sistema y no se puede eliminar."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         proveedor.soft_delete()
         return Response(
             {"message": "Proveedor eliminado correctamente"},
@@ -256,6 +268,11 @@ def hard_delete_proveedor(request, pk):
     """Eliminar permanentemente un proveedor"""
     try:
         proveedor = get_object_or_404(Proveedor.objects, pk=pk)
+        if proveedor.protegido:
+            return Response(
+                {"error": "Este proveedor es del sistema y no se puede eliminar."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         proveedor.delete()
         return Response(
             {"message": "Proveedor eliminado permanentemente"},

@@ -44,6 +44,11 @@ else:
 # sin asiento y queda pendiente para el management command de backfill.
 UTILIDADES_SUB_CUENTA_CODIGO = os.getenv('UTILIDADES_SUB_CUENTA_CODIGO', '').strip()
 
+# Codigo de la SubCuenta de ingresos por SOAT (cuenta 4135). Es el CREDITO del
+# asiento de comision al confirmar un pago exitoso en pasarela. Default 'ING001'.
+# Si la sub-cuenta no existe, el asiento de comision se omite (warning logueado).
+INGRESOS_SOAT_SUB_CUENTA_CODIGO = os.getenv('INGRESOS_SOAT_SUB_CUENTA_CODIGO', 'ING001').strip()
+
 
 # Application definition
 
@@ -254,7 +259,7 @@ CHANNEL_LAYERS = {
         "CONFIG": {
             "hosts": [(
                 os.getenv('REDIS_HOST', '127.0.0.1'),
-                int(os.getenv('REDIS_PORT', '6379')), #6381 Pro - 6379 local
+                int(os.getenv('REDIS_PORT', '6381')), #6381 Pro - 6379 local
             )],
         },
     },
@@ -267,7 +272,7 @@ CHANNEL_LAYERS = {
 # En producción, define REDIS_HOST/REDIS_PORT en .env (igual que ya haces para
 # Channels) y ambos apuntarán al mismo servidor automáticamente.
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
-REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))  # mismo default que CHANNEL_LAYERS
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6381'))  # mismo default que CHANNEL_LAYERS
 
 CELERY_BROKER_URL        = os.getenv('CELERY_BROKER_URL',    f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
 CELERY_RESULT_BACKEND    = os.getenv('CELERY_RESULT_BACKEND', f'redis://{REDIS_HOST}:{REDIS_PORT}/2')

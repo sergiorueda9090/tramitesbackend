@@ -408,10 +408,18 @@ def update_finalizado(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('finalizados_tramites', 'delete')])
 def delete_finalizado(request, pk):
-    """Eliminar un finalizado (soft delete)"""
+    """Eliminar un finalizado (soft delete) y revertir sus asientos contables."""
     try:
+        from movimiento_contable.services import revertir_asiento
         t = get_object_or_404(TramiteFinalizado.objects, pk=pk)
-        t.soft_delete()
+        with transaction.atomic():
+            revertir_asiento(t.asiento_emision_id)
+            revertir_asiento(t.asiento_comision_id)
+            TramiteFinalizado.objects.filter(pk=t.pk).update(
+                asiento_emision_id=None, asiento_comision_id=None
+            )
+            t.refresh_from_db(fields=['asiento_emision_id', 'asiento_comision_id'])
+            t.soft_delete()
         return Response({"message": "Finalizado eliminado correctamente"}, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({"error": f"Error al eliminar finalizado: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -420,12 +428,18 @@ def delete_finalizado(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('finalizados_tramites', 'delete')])
 def restore_finalizado(request, pk):
-    """Restaurar un finalizado eliminado"""
+    """Restaurar un finalizado eliminado y volver a postear sus asientos contables."""
     try:
-        t = get_object_or_404(TramiteFinalizado.objects, pk=pk)
+        from ..services import _registrar_asientos_soat
+        t = get_object_or_404(
+            TramiteFinalizado.objects.select_related('cliente__sub_cuenta'), pk=pk
+        )
         if not t.is_deleted:
             return Response({"error": "El finalizado no está eliminado"}, status=status.HTTP_400_BAD_REQUEST)
-        t.restore()
+        with transaction.atomic():
+            t.restore()
+            # Re-postear los asientos (best-effort, mismos criterios que al crear).
+            _registrar_asientos_soat(t, t.usuario_que_confirma)
         return Response(serialize_finalizado(t), status=status.HTTP_200_OK)
     except Exception as e:
         return Response({"error": f"Error al restaurar finalizado: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -434,10 +448,14 @@ def restore_finalizado(request, pk):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated, RolePermission(['admin', 'SuperAdmin']), ModulePermission('finalizados_tramites', 'delete')])
 def hard_delete_finalizado(request, pk):
-    """Eliminar permanentemente un finalizado"""
+    """Eliminar permanentemente un finalizado (revierte sus asientos si seguían activos)."""
     try:
+        from movimiento_contable.services import revertir_asiento
         t = get_object_or_404(TramiteFinalizado.objects, pk=pk)
-        t.delete()
+        with transaction.atomic():
+            revertir_asiento(t.asiento_emision_id)
+            revertir_asiento(t.asiento_comision_id)
+            t.delete()
         return Response({"message": "Finalizado eliminado permanentemente"}, status=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         return Response({"error": f"Error al eliminar finalizado: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

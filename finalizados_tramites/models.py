@@ -161,6 +161,13 @@ class TramiteFinalizado(models.Model):
     # cambia su flag más adelante, este valor permanece intacto.
     cuatro_por_mil_valor = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text='Snapshot del 4x1000 calculado al confirmar el pago')
 
+    # Asientos contables generados al confirmar el pago exitoso (libro mayor).
+    # asiento_emision_id : Debito cliente / Credito proveedor, valor=precio_lay.
+    # asiento_comision_id: Debito cliente / Credito ingresos SOAT (4135), valor=comision.
+    # Pueden quedar en None si faltaban datos para asentar (ver services.py).
+    asiento_emision_id  = models.UUIDField(null=True, blank=True, help_text='UUID del asiento de emisión SOAT')
+    asiento_comision_id = models.UUIDField(null=True, blank=True, help_text='UUID del asiento de comisión SOAT')
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)

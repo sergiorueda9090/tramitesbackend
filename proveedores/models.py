@@ -20,6 +20,10 @@ class Proveedor(models.Model):
         related_name='proveedores',
         help_text='Sub-cuenta contable asociada al proveedor (obligatoria)'
     )
+    protegido = models.BooleanField(
+        default=False,
+        help_text='Proveedor del sistema (PREVISORA/MUNDIAL): no se puede editar ni eliminar'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)

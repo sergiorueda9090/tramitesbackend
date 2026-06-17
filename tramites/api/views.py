@@ -27,6 +27,63 @@ def entidad_por_defecto(tipo_vehiculo):
     return opciones[0] if opciones else ''
 
 
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _ingresos_soat_sub_cuenta_info():
+    """Resumen {codigo, nombre} de la sub-cuenta de ingresos por SOAT (4135),
+    para mostrarla como crédito de la comisión en el modal de confirmación.
+
+    Cacheado a nivel de proceso: el código viene de una env var y la sub-cuenta
+    casi nunca cambia. Si se renombra, requiere reinicio del worker (informativo).
+    """
+    from django.conf import settings
+    codigo = getattr(settings, 'INGRESOS_SOAT_SUB_CUENTA_CODIGO', '') or ''
+    if not codigo:
+        return None
+    from sub_cuentas.models import SubCuenta
+    sub = SubCuenta.objects.filter(codigo=codigo, deleted_at__isnull=True).values(
+        'codigo', 'nombre_sub_cuenta'
+    ).first()
+    if not sub:
+        return None
+    return {'sub_cuenta_codigo': sub['codigo'], 'sub_cuenta_nombre': sub['nombre_sub_cuenta']}
+
+
+def proveedor_por_entidad(entidad):
+    """Resuelve el Proveedor cuyo nombre coincide con la entidad del trámite.
+
+    Solo PREVISORA y MUNDIAL existen como proveedores (registros protegidos del
+    sistema), así que SOLIDARIA/MANUAL/'' devuelven None.
+    """
+    if not entidad:
+        return None
+    from proveedores.models import Proveedor
+    return (
+        Proveedor.objects
+        .select_related('sub_cuenta')
+        .filter(nombre__iexact=entidad, deleted_at__isnull=True)
+        .first()
+    )
+
+
+def _proveedor_info(tramite):
+    """Datos del proveedor para el serializer. Usa el FK si está enlazado; si no,
+    lo resuelve desde la `entidad` (trámites creados antes de existir el FK).
+    Devuelve None si la entidad no tiene proveedor (SOLIDARIA/MANUAL/'')."""
+    prov = tramite.proveedor if tramite.proveedor_id else proveedor_por_entidad(tramite.entidad)
+    if not prov:
+        return None
+    return {
+        'id': prov.id,
+        'nombre': prov.nombre,
+        'color': prov.color,
+        'sub_cuenta_codigo': prov.sub_cuenta.codigo if prov.sub_cuenta_id else None,
+        'sub_cuenta_nombre': prov.sub_cuenta.nombre_sub_cuenta if prov.sub_cuenta_id else None,
+    }
+
+
 def serialize_tramite(tramite):
     """Convierte un objeto Tramite a diccionario"""
     return {
@@ -38,6 +95,8 @@ def serialize_tramite(tramite):
         'cliente': {
             'id': tramite.cliente.id,
             'nombre': tramite.cliente.nombre,
+            'sub_cuenta_codigo': tramite.cliente.sub_cuenta.codigo if tramite.cliente.sub_cuenta_id else None,
+            'sub_cuenta_nombre': tramite.cliente.sub_cuenta.nombre_sub_cuenta if tramite.cliente.sub_cuenta_id else None,
         } if tramite.cliente else None,
         'etiqueta': {
             'id': tramite.etiqueta.id,
@@ -60,6 +119,10 @@ def serialize_tramite(tramite):
         'tipo_vehiculo_display': tramite.get_tipo_vehiculo_display() if tramite.tipo_vehiculo else '',
         'entidad': tramite.entidad,
         'entidad_display': tramite.get_entidad_display() if tramite.entidad else '',
+        'proveedor': _proveedor_info(tramite),
+        # Sub-cuenta de ingresos por SOAT (4135): crédito del asiento de comisión.
+        # Informativo para el modal de confirmación de pago. Cacheado (ver helper).
+        'ingresos_soat_sub_cuenta': _ingresos_soat_sub_cuenta_info(),
 
         'grupo_soat': tramite.grupo_soat,
         'grupo_soat_display': tramite.get_grupo_soat_display() if tramite.grupo_soat else '',
@@ -141,6 +204,11 @@ def create_tramite(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Si el cliente no envía entidad, derivar la default del tipo_vehiculo,
+        # y dejar el trámite asociado al proveedor correspondiente (PREVISORA/MUNDIAL).
+        entidad_value = (request.data.get('entidad')
+                         or entidad_por_defecto(request.data.get('tipo_vehiculo', '')))
+
         tramite = Tramite.objects.create(
             usuario=request.user,
             cliente_id=request.data.get('cliente'),
@@ -150,8 +218,8 @@ def create_tramite(request):
 
             tipo_tramite=request.data.get('tipo_tramite', 'SOAT') or 'SOAT',
             tipo_vehiculo=request.data.get('tipo_vehiculo', '') or '',
-            # Si el cliente no envía entidad, derivar la default del tipo_vehiculo.
-            entidad=(request.data.get('entidad') or entidad_por_defecto(request.data.get('tipo_vehiculo', ''))),
+            entidad=entidad_value,
+            proveedor=proveedor_por_entidad(entidad_value),
 
             grupo_soat=request.data.get('grupo_soat', '') or '',
             grupo_clase_runt=request.data.get('grupo_clase_runt', '') or '',
@@ -269,6 +337,10 @@ def crear_desde_base_de_datos(request):
         # Trámites solo soporta CC/CE/NIT/PAS. Otros tipos caen a CC por defecto.
         tipo_documento_tramite = _TIPO_DOC_MAP.get(registro.tipo_documento, 'CC')
 
+        # Entidad por defecto según el tipo de vehículo del registro, con su
+        # proveedor asociado (PREVISORA/MUNDIAL) cuando aplique.
+        entidad_value = entidad_por_defecto(registro.tipo_vehiculo or '')
+
         tramite = Tramite.objects.create(
             usuario=request.user,
             cliente=registro.cliente,
@@ -278,6 +350,8 @@ def crear_desde_base_de_datos(request):
 
             tipo_tramite=registro.tipo_tramite or 'SOAT',
             tipo_vehiculo=registro.tipo_vehiculo or '',
+            entidad=entidad_value,
+            proveedor=proveedor_por_entidad(entidad_value),
 
             grupo_soat='',
             grupo_clase_runt='',
@@ -338,8 +412,8 @@ def list_tramites(request):
     """Listar trámites con filtros y paginación"""
     try:
         tramites = Tramite.objects.select_related(
-            'usuario', 'cliente', 'etiqueta', 'precio_cliente', 'tarifario_soat',
-            'link_pago_job',
+            'usuario', 'cliente', 'cliente__sub_cuenta', 'etiqueta', 'precio_cliente', 'tarifario_soat',
+            'link_pago_job', 'proveedor', 'proveedor__sub_cuenta',
         ).all()
 
         # Excluir trámites que ya fueron enviados a pasarela (con una pasarela activa,
@@ -462,7 +536,7 @@ def get_tramite(request, pk):
     """Obtener un trámite por ID"""
     try:
         tramite = get_object_or_404(
-            Tramite.objects.select_related('usuario', 'cliente', 'etiqueta', 'precio_cliente', 'tarifario_soat', 'link_pago_job'),
+            Tramite.objects.select_related('usuario', 'cliente', 'cliente__sub_cuenta', 'etiqueta', 'precio_cliente', 'tarifario_soat', 'link_pago_job', 'proveedor', 'proveedor__sub_cuenta'),
             pk=pk
         )
         return Response(serialize_tramite(tramite), status=status.HTTP_200_OK)
@@ -494,6 +568,9 @@ def update_tramite(request, pk):
         tramite.tipo_tramite = request.data.get('tipo_tramite', tramite.tipo_tramite)
         tramite.tipo_vehiculo = request.data.get('tipo_vehiculo', tramite.tipo_vehiculo)
         tramite.entidad = request.data.get('entidad', tramite.entidad)
+        # Si la entidad cambió, re-resolver el proveedor asociado.
+        if 'entidad' in request.data:
+            tramite.proveedor = proveedor_por_entidad(tramite.entidad)
 
         # Árbol Grupo SOAT
         tramite.grupo_soat = request.data.get('grupo_soat', tramite.grupo_soat)

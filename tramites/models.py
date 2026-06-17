@@ -68,6 +68,9 @@ class Tramite(models.Model):
     tipo_tramite  = models.CharField(max_length=20, choices=TIPO_TRAMITE_CHOICES, default='SOAT')
     tipo_vehiculo = models.CharField(max_length=10, choices=TIPO_VEHICULO_CHOICES, blank=True, default='')
     entidad       = models.CharField(max_length=20, choices=ENTIDAD_CHOICES, blank=True, default='')
+    # Proveedor resuelto a partir de la entidad (PREVISORA/MUNDIAL). Puede quedar
+    # en None si la entidad no tiene proveedor (ej. SOLIDARIA/MANUAL).
+    proveedor     = models.ForeignKey('proveedores.Proveedor', on_delete=models.SET_NULL, null=True, blank=True, related_name='tramites', help_text='Proveedor asociado, derivado de la entidad')
 
     # Resolución del árbol Grupo SOAT → Módulo → Tarifa (snapshot del Step 7 del Cotizador)
     grupo_soat          = models.CharField(max_length=20, choices=GRUPO_SOAT_CHOICES, blank=True, default='')
