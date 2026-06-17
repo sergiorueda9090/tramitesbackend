@@ -254,6 +254,25 @@ def create_tramite(request):
             direccion=request.data.get('direccion', '') or '',
         )
 
+        # Reconciliar la `entidad` con el proveedor REAL que usará el link de pago.
+        # `resolver_proveedor` aplica la regla moto+año (≤2021 → Mundial / ≥2022 →
+        # Previsora), que tiene prioridad sobre la entidad por defecto del
+        # tipo_vehiculo. Sin esto una moto podía quedar con entidad PREVISORA
+        # mientras el link ejecuta MUNDIAL (la columna no coincidía con el link).
+        # Solo se ajusta cuando la regla moto+año decide; SOLIDARIA/MANUAL y los
+        # no-motos conservan la entidad derivada arriba.
+        from tramites.services.generar_link import es_moto, resolver_proveedor
+        try:
+            _anio_modelo = int(tramite.modelo)
+        except (TypeError, ValueError):
+            _anio_modelo = None
+        if es_moto(tramite) and _anio_modelo is not None:
+            entidad_link = resolver_proveedor(tramite).upper()  # 'MUNDIAL' | 'PREVISORA'
+            if tramite.entidad != entidad_link:
+                tramite.entidad = entidad_link
+                tramite.proveedor = proveedor_por_entidad(entidad_link)
+                tramite.save(update_fields=['entidad', 'proveedor'])
+
         # IMPORTANTE: crear el LinkPagoJob y encolar ANTES de emitir
         # `tramite_added_event`. Así, cuando las otras sesiones reciban el evento
         # y traigan el trámite (GET), el `link_pago` ya existe (estado 'pendiente')
@@ -426,6 +445,19 @@ def list_tramites(request):
             deleted_at__isnull=True,
         )
         tramites = tramites.annotate(_has_active_pasarela=Exists(active_pasarela)).filter(_has_active_pasarela=False)
+
+        # Excluir trámites YA FINALIZADOS (pago exitoso → TramiteFinalizado).
+        # Al confirmar el pago la pasarela se soft-borra (deja de ser "activa"),
+        # por lo que el filtro anterior ya no lo oculta y el trámite reaparecía al
+        # recargar. Debe seguir oculto mientras exista un finalizado activo que lo
+        # referencia (tramite_origen_id_snapshot). El caso de cancelación —pasarela
+        # soft-borrada SIN finalizado— no entra aquí, así que ese trámite sí reaparece.
+        from finalizados_tramites.models import TramiteFinalizado
+        finalizado_activo = TramiteFinalizado.objects.filter(
+            tramite_origen_id_snapshot=OuterRef('pk'),
+            deleted_at__isnull=True,
+        )
+        tramites = tramites.annotate(_has_finalizado=Exists(finalizado_activo)).filter(_has_finalizado=False)
 
         # Filtro de búsqueda
         search_query = request.query_params.get('search', None)

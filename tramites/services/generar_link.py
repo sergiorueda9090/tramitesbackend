@@ -213,10 +213,14 @@ def extraer_url_pago(data):
 
     Previsora responde en la raíz: {"success": true, "urlPago": "https://..."}.
     Por eso hay que mirar `data['urlPago']` (raíz), no solo `data['data'][...]`.
+
+    Mundial responde en la raíz con la clave `url_pse`:
+    {"url_pse": "https://soatmundial.com.co/pagos/pago-con-pse/?id=..."}.
     """
     if not isinstance(data, dict):
         return None
-    CLAVES = ('urlPago', 'url', 'link', 'urlpago', 'linkPago', 'linkpago')
+    CLAVES = ('urlPago', 'url', 'link', 'urlpago', 'linkPago', 'linkpago',
+              'url_pse', 'urlPse')
     # 1) anidado bajo 'data' (otros proveedores)
     d = data.get('data') if isinstance(data.get('data'), dict) else {}
     for k in CLAVES:
